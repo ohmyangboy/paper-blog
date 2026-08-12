@@ -597,17 +597,18 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         return config
     config = result
     print("\n第 4 步 / 共 4 步：发布并开启 GitHub Pages")
-    print("  gh-pages 分支要等你发布之后才会出现，顺序是：先发布，再开启 Pages。")
+    print("  ⚠️ 关键顺序：先发布，再开 Pages —— gh-pages 分支要等你发布之后才存在。")
     print("  · 发布：执行 paper publish（或在文章控制台多选发布）。首次发布会把站点推送到 gh-pages 分支。")
-    print(f"  · 发布成功后再打开设置页，在「Deploy from a branch」选择 gh-pages 分支并保存。")
+    print("  · 发布前打开设置页，会先看到「GitHub Pages is currently disabled / add content」——")
+    print("    这是正常的：仓库还是空的，推送 gh-pages 后才会消失。")
     print(f"  设置页：{info.pages_settings_url}")
-    choice = _prompt("\n  现在先打开设置页看看位置吗？按 Enter 打开 · 输入 skip 稍后自己打开：")
+    choice = _prompt("\n  现在打开设置页看看吗？按 Enter 打开（会显示 disabled，属正常）· 输入 skip 稍后自己打开：")
     if choice is None or choice.lower() == "skip":
-        print("  已跳过。发布成功后记得打开上面的设置页选择 gh-pages。")
+        print("  已跳过。发布成功后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
     else:
         opened = _open_browser(info.pages_settings_url)
         print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
-        print("  ⚠️ 若「Deploy from a branch」下拉框里没有 gh-pages，说明还没发布成功 —— 先执行 paper publish。")
+        print("  ⚠️ 显示 disabled/add content = 仓库还没推送任何分支 —— 先执行 paper publish，再回来刷新即可选 gh-pages。")
     _pause()
     return config
 
