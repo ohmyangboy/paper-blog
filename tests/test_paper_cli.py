@@ -231,9 +231,9 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 self.assertEqual(main(["link", str(root_path / "posts")]), 0)
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["", "octocat/Hello-World", "", ""]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
-                ):
+                ), mock.patch(
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True):
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
@@ -255,9 +255,9 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 self.assertEqual(main(["link", str(root_path / "posts")]), 0)
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["", "octocat/Hello-World", "", ""]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
-                ) as browser:
+                ), mock.patch(
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
                     self.assertEqual(cmd_config(), 0)
                 self.assertEqual(
                     browser.call_args_list,
@@ -295,9 +295,28 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "not-an-address", "", "octocat/Hello-World", "", ""]
+                    "builtins.input",
+                    side_effect=["", "not-an-address", "", "octocat/Hello-World", "", "", ""],
                 ), mock.patch("paper_cli.webbrowser.open", return_value=True):
                     self.assertEqual(cmd_config(), 0)
+                saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
+            finally:
+                self._restore_paper_home(old_home)
+
+    def test_wizard_skip_keeps_settings_page_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                    "paper_cli._terminal_menu", side_effect=["remote", None]
+                ), mock.patch(
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "skip", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
+                    self.assertEqual(cmd_config(), 0)
+                self.assertEqual(browser.call_args_list, [mock.call("https://github.com/new")])
                 saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
             finally:

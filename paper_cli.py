@@ -596,11 +596,18 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     if result is None:
         return config
     config = result
-    print("\n第 4 步 / 共 4 步：开启 GitHub Pages")
-    print("  发布：执行 paper publish（或在控制台多选发布）。首次发布会把内容推送到 gh-pages 分支。")
-    print("  现在为你打开 GitHub Pages 设置页 —— 在「Deploy from a branch」选择 gh-pages 分支并保存。")
-    opened = _open_browser(info.pages_settings_url)
-    print(f"  {'已为你打开' if opened else '未能自动打开'}设置页：{info.pages_settings_url}")
+    print("\n第 4 步 / 共 4 步：发布并开启 GitHub Pages")
+    print("  gh-pages 分支要等你发布之后才会出现，顺序是：先发布，再开启 Pages。")
+    print("  · 发布：执行 paper publish（或在文章控制台多选发布）。首次发布会把站点推送到 gh-pages 分支。")
+    print(f"  · 发布成功后再打开设置页，在「Deploy from a branch」选择 gh-pages 分支并保存。")
+    print(f"  设置页：{info.pages_settings_url}")
+    choice = _prompt("\n  现在先打开设置页看看位置吗？按 Enter 打开 · 输入 skip 稍后自己打开：")
+    if choice is None or choice.lower() == "skip":
+        print("  已跳过。发布成功后记得打开上面的设置页选择 gh-pages。")
+    else:
+        opened = _open_browser(info.pages_settings_url)
+        print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
+        print("  ⚠️ 若「Deploy from a branch」下拉框里没有 gh-pages，说明还没发布成功 —— 先执行 paper publish。")
     _pause()
     return config
 
