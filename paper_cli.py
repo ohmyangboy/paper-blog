@@ -411,7 +411,7 @@ def cmd_config() -> int:
                 ("brand", "首页与品牌", "高亮颜色 / Favicon 图标"),
                 ("editor", "默认编辑器", f"当前 {config.editor}"),
                 ("link", "关联文章目录", str(config.posts_dir)),
-                ("remote", "GitHub 远程", f"当前 {remote_info.owner}/{remote_info.repo}" if remote_info else "未配置 · 引导创建仓库"),
+                ("remote", "GitHub 远程", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
                 ("pages-url", "站点地址", "Pages 地址 / 自定义域名"),
                 ("test-conn", "测试连接", "检查 Git 与远程可达性"),
                 ("status", "查看完整配置", f"路径 / 仓库 / 部署（{readiness_label}）"),
@@ -476,6 +476,17 @@ def _deployment_readiness(config: PaperConfig) -> tuple[str, str]:
     return "ready", "已就绪"
 
 
+def _gh_pages_pushed(config: PaperConfig) -> bool:
+    """Offline check that a publish has pushed gh-pages.
+
+    ``git subtree push`` leaves the remote-tracking ref
+    ``refs/remotes/origin/gh-pages`` behind (it does not create a local
+    branch), so its presence is the reliable signal that gh-pages exists.
+    """
+    probe = _git(config, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/gh-pages", capture=True)
+    return probe.returncode == 0
+
+
 def _prompt(message: str) -> str | None:
     """Read a line, stripping whitespace; None means the user cancelled (EOF/Interrupt)."""
     try:
@@ -524,62 +535,45 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     return saved
 
 
-def cmd_remote_manage(config: PaperConfig, info: GitRemoteInfo) -> PaperConfig:
-    """Inline management entry for an already-configured remote: open Pages, modify, or return."""
-
-    while True:
-        _state, label = _deployment_readiness(config)
-        print(f"已配置：{info.owner}/{info.repo} · 部署就绪：{label}")
-        print(f"Pages 地址：{info.pages_url}")
-        action = _prompt("输入新地址=修改远程 · 输入 open=打开 GitHub Pages 设置 · 留空=返回：")
-        if action is None:
-            return config
-        action = action.strip()
-        if not action:
-            return config
-        if action.lower() == "open":
-            opened = _open_browser(info.pages_settings_url)
-            print(f"{'已为你打开' if opened else '未能自动打开'} Pages 设置页：{info.pages_settings_url}")
-            _pause()
-            return config
-        new_info = normalize_git_remote(action)
-        if new_info is None:
-            _error("无法识别的 GitHub 仓库地址，请粘贴完整地址或 owner/repo 简写。", 1)
-            _pause()
-            continue
-        result = _confirm_and_save_remote(config, new_info)
-        if result is not None:
-            config = result
-            _pause()
-        return config
-
-
 def cmd_remote_entry(config: PaperConfig) -> PaperConfig:
-    """Route the 远程 option: guided wizard when unconfigured, manage entry when configured."""
+    """The 远程 option always runs the guided wizard — first-time setup and
+    re-binding both flow through it. The wizard is state-aware: an existing
+    binding is shown up front, the create-repo step is skipped, and pasting a
+    new address re-binds (replacing the origin when it differs).
+    """
 
     _clear_screen()
-    info = normalize_git_remote(config.git_remote)
-    if info is not None:
-        return cmd_remote_manage(config, info)
     return cmd_remote_wizard(config)
 
 
 def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
-    """Guided 4-step first-time setup: create repo, paste address, confirm, enable Pages."""
+    """Guided 4-step flow: create repo, paste address, confirm, publish + enable Pages.
+
+    Runs for first-time setup and re-binding alike. When a remote is already
+    bound it is shown up front and the create-repo step is skipped; pasting a
+    new address re-binds through the same confirm/save path.
+    """
 
     if shutil.which("git") is None:
         _error("未找到 Git。请先安装 Git（macOS：brew install git），再来配置 GitHub 远程。", 1)
         _pause()
         return config
+    existing = normalize_git_remote(config.git_remote)
     print("🧭 GitHub Pages 发布向导（4 步）\n")
+    if existing:
+        print(f"  当前已绑定：{existing.owner}/{existing.repo} · {existing.pages_url}")
+        print("  要更换绑定，直接在第 2 步粘贴新地址；要保留当前绑定，留空退出。\n")
     print("第 1 步 / 共 4 步：创建仓库")
-    opened = _open_browser("https://github.com/new")
-    print(f"  {'已为你打开' if opened else '未能自动打开'} https://github.com/new —— 没有反应就复制这条网址手动打开。")
-    print("  · 仓库名决定博客地址：你的用户名.github.io → 根路径；其它名字 → /仓库名 子路径")
-    print("  · 已有仓库可跳过本步，直接到下一步粘贴地址")
-    if not _confirm_continue("创建好仓库并复制地址后，按 Enter 继续（输入任意内容取消）："):
-        print("已取消。")
-        return config
+    if existing:
+        print("  已绑定仓库，无需新建 —— 直接到第 2 步粘贴要绑定的地址。")
+    else:
+        opened = _open_browser("https://github.com/new")
+        print(f"  {'已为你打开' if opened else '未能自动打开'} https://github.com/new —— 没有反应就复制这条网址手动打开。")
+        print("  · 仓库名决定博客地址：你的用户名.github.io → 根路径；其它名字 → /仓库名 子路径")
+        print("  · 已有仓库可跳过本步，直接到下一步粘贴地址")
+        if not _confirm_continue("创建好仓库并复制地址后，按 Enter 继续（输入任意内容取消）："):
+            print("已取消。")
+            return config
     print("第 2 步 / 共 4 步：粘贴仓库地址")
     while True:
         raw = _prompt("  仓库地址（SSH / HTTPS / owner/repo 简写；留空取消）：")
@@ -597,18 +591,32 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         return config
     config = result
     print("\n第 4 步 / 共 4 步：发布并开启 GitHub Pages")
-    print("  ⚠️ 关键顺序：先发布，再开 Pages —— gh-pages 分支要等你发布之后才存在。")
-    print("  · 发布：执行 paper publish（或在文章控制台多选发布）。首次发布会把站点推送到 gh-pages 分支。")
-    print("  · 发布前打开设置页，会先看到「GitHub Pages is currently disabled / add content」——")
-    print("    这是正常的：仓库还是空的，推送 gh-pages 后才会消失。")
-    print(f"  设置页：{info.pages_settings_url}")
-    choice = _prompt("\n  现在打开设置页看看吗？按 Enter 打开（会显示 disabled，属正常）· 输入 skip 稍后自己打开：")
+    print("  gh-pages 分支要等你发布之后才存在。现在可以直接发布，不用退出配置。")
+    choice = _prompt("\n  现在发布并推送 gh-pages 吗？按 Enter 发布（会先勾选草稿）· 输入 skip 稍后自己发布：")
     if choice is None or choice.lower() == "skip":
-        print("  已跳过。发布成功后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
+        print("  已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
+    else:
+        cmd_publish(all_posts=False, slugs=[])
+        if _gh_pages_pushed(config):
+            print("  ✅ 已推送 gh-pages —— 设置页里现在可以选到它了。")
+        else:
+            print("  ⚠️ 尚未推送 gh-pages（刚才可能没有勾选草稿）。")
+            retry = _prompt("  要把当前站点（首页 + 已发布内容）先推上去吗？按 Enter 推送 · 输入 skip 稍后自己处理：")
+            if not (retry is None or retry.lower() == "skip"):
+                try:
+                    build_site(config)
+                    pushed = cmd_deploy() == 0
+                except Exception:
+                    pushed = False
+                print("  ✅ 已推送 gh-pages。" if pushed else "  ⚠️ 推送未成功，稍后执行 paper publish 重试。")
+    print(f"\n  设置页：{info.pages_settings_url}")
+    open_choice = _prompt("  现在打开设置页选 gh-pages 吗？按 Enter 打开 · 输入 skip 稍后自己打开：")
+    if open_choice is None or open_choice.lower() == "skip":
+        print("  已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
     else:
         opened = _open_browser(info.pages_settings_url)
         print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
-        print("  ⚠️ 显示 disabled/add content = 仓库还没推送任何分支 —— 先执行 paper publish，再回来刷新即可选 gh-pages。")
+        print("  ⚠️ 若下拉框里没有 gh-pages，说明还没推送成功 —— 稍后执行 paper publish 再回来刷新。")
     _pause()
     return config
 
@@ -995,18 +1003,25 @@ def cmd_publish(all_posts: bool, slugs: list[str]) -> int:
         return 2
     drafts = [post for post in discover_posts(config.posts_dir) if not post.published]
     if not all_posts and not slugs and sys.stdin.isatty() and sys.stdout.isatty():
+        if not drafts:
+            print("没有待发布的草稿。先 paper new 创建文章，之后再发布。")
+            return 0
         slugs = _terminal_multiselect(
             "🚀 勾选要发布的草稿：",
             [(post.slug, post.title, post.date) for post in drafts],
         )
         if not slugs:
-            print("已取消发布。")
+            print("未勾选任何草稿，已跳过发布。")
             return 0
     wanted = set(slugs)
     targets = drafts if all_posts else [post for post in drafts if post.slug in wanted]
     if not targets:
+        if all_posts:
+            return _error("没有待发布的草稿。先 paper new 创建文章。", 1)
         available = ", ".join(post.slug for post in drafts)
-        return _error(f"没有匹配的草稿。可用草稿：{available or '无'}", 1)
+        if not slugs:
+            return _error("未指定要发布的文章。用 paper publish <slug> 或 paper publish --all 指定。", 1)
+        return _error(f"没有匹配的草稿：{', '.join(slugs)}。可用草稿：{available or '无'}", 1)
     originals = {post.source_path: post.source_path.read_text(encoding="utf-8") for post in targets}
     for post in targets:
         set_post_published(post.source_path, True)

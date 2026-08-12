@@ -216,6 +216,57 @@ class PaperCliTests(unittest.TestCase):
                 else:
                     os.environ["PAPER_HOME"] = old_home
 
+    def test_publish_no_drafts_in_tty_reports_cleanly(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), mock.patch(
+                    "sys.stdin.isatty", return_value=True
+                ), mock.patch("sys.stdout.isatty", return_value=True), mock.patch(
+                    "paper_cli._terminal_multiselect", return_value=[]
+                ) as multiselect:
+                    code = main(["publish"])
+                self.assertEqual(code, 0)
+                self.assertIn("没有待发布的草稿", output.getvalue())
+                multiselect.assert_not_called()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_publish_empty_selection_reports_skip_and_keeps_draft(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                draft = root_path / "notes" / "draft.md"
+                draft.write_text(
+                    "---\ntitle: Draft\npublished: false\n---\n\nBody\n",
+                    encoding="utf-8",
+                )
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), mock.patch(
+                    "sys.stdin.isatty", return_value=True
+                ), mock.patch("sys.stdout.isatty", return_value=True), mock.patch(
+                    "paper_cli._terminal_multiselect", return_value=[]
+                ):
+                    code = main(["publish"])
+                self.assertEqual(code, 0)
+                self.assertIn("未勾选任何草稿", output.getvalue())
+                self.assertIn("published: false", draft.read_text(encoding="utf-8"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
 
 class GitHubRemoteConfigTests(unittest.TestCase):
     def _set_paper_home(self, root: Path):
@@ -232,8 +283,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True):
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", "", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli.cmd_publish", return_value=0
+                ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
@@ -256,8 +309,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", "", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser, mock.patch(
+                    "paper_cli.cmd_publish", return_value=0
+                ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
                 self.assertEqual(
                     browser.call_args_list,
@@ -296,8 +351,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
                     "builtins.input",
-                    side_effect=["", "not-an-address", "", "octocat/Hello-World", "", "", ""],
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True):
+                    side_effect=["", "not-an-address", "", "octocat/Hello-World", "", "", "", ""],
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli.cmd_publish", return_value=0
+                ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
@@ -313,7 +370,7 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "skip", ""]
+                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "skip", "skip", ""]
                 ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
                     self.assertEqual(cmd_config(), 0)
                 self.assertEqual(browser.call_args_list, [mock.call("https://github.com/new")])
@@ -322,7 +379,7 @@ class GitHubRemoteConfigTests(unittest.TestCase):
             finally:
                 self._restore_paper_home(old_home)
 
-    def test_configured_remote_skips_wizard_and_opens_pages(self):
+    def test_configured_remote_rebind_skips_repo_creation(self):
         if shutil.which("git") is None:
             self.skipTest("git not available")
         with tempfile.TemporaryDirectory() as root:
@@ -341,40 +398,18 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 _init_with_origin(site, "git@github.com:octocat/Hello-World.git")
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["open", ""]), mock.patch(
+                ), mock.patch("builtins.input", side_effect=["octocat/New-Repo", "", "YES", "", "", ""]), mock.patch(
                     "paper_cli.webbrowser.open", return_value=True
-                ) as browser:
-                    self.assertEqual(cmd_config(), 0)
-                self.assertEqual(
-                    browser.call_args_list,
-                    [mock.call("https://github.com/octocat/Hello-World/settings/pages")],
-                )
-            finally:
-                self._restore_paper_home(old_home)
-
-    def test_configured_remote_inline_modify(self):
-        if shutil.which("git") is None:
-            self.skipTest("git not available")
-        with tempfile.TemporaryDirectory() as root:
-            root_path = Path(root)
-            old_home = self._set_paper_home(root_path)
-            try:
-                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
-                config_file = root_path / ".paper" / "config.json"
-                config_file.write_text(
-                    config_file.read_text(encoding="utf-8").replace(
-                        '"gitRemote": ""', '"gitRemote": "git@github.com:octocat/Hello-World.git"'
-                    ),
-                    encoding="utf-8",
-                )
-                site = root_path / ".paper" / "site"
-                _init_with_origin(site, "git@github.com:octocat/Hello-World.git")
-                with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
-                    "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["octocat/New-Repo", "", "YES", ""]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
+                ) as browser, mock.patch("paper_cli.cmd_publish", return_value=0), mock.patch(
+                    "paper_cli._gh_pages_pushed", return_value=True
                 ):
                     self.assertEqual(cmd_config(), 0)
+                # Re-binding still runs the wizard, but skips the create-repo step:
+                # no github.com/new, only the new repo's Pages settings.
+                self.assertEqual(
+                    browser.call_args_list,
+                    [mock.call("https://github.com/octocat/New-Repo/settings/pages")],
+                )
                 saved = json.loads(config_file.read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/New-Repo.git")
                 origin = subprocess.run(
@@ -384,7 +419,7 @@ class GitHubRemoteConfigTests(unittest.TestCase):
             finally:
                 self._restore_paper_home(old_home)
 
-    def test_configured_remote_inline_cancel(self):
+    def test_configured_remote_wizard_cancel_keeps_binding(self):
         if shutil.which("git") is None:
             self.skipTest("git not available")
         with tempfile.TemporaryDirectory() as root:
@@ -432,7 +467,11 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 _init_with_origin(site, "git@github.com:old/old.git")
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["octocat/Hello-World", "", "YES", ""]):
+                ), mock.patch(
+                    "builtins.input", side_effect=["octocat/Hello-World", "", "YES", "", "", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli.cmd_publish", return_value=0
+                ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads(config_file.read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:octocat/Hello-World.git")
