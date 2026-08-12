@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Node / historical Next.js prototype (generated)
+node_modules/
+.next/
+out/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# Paper user-local config (absolute local paths, migrated to ~/.paper)
+.paper-config.json
+
+# Tool state
+.codewhale/
+
+# OS
+.DS_Store
