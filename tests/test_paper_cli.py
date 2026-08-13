@@ -187,6 +187,7 @@ class PaperCliTests(unittest.TestCase):
                 watcher.join(timeout=1)
 
     def test_preview_watcher_batches_a_burst_of_changes(self):
+        self.assertEqual(paper_cli.PREVIEW_DEBOUNCE_SECONDS, 2.0)
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             posts = root_path / "posts"

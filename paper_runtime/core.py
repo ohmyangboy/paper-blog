@@ -727,7 +727,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown tbody tr:nth-child(even) td { background-color: var(--code-bg); }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
-.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; }
+.markdown img { display: block; max-width: 100%; height: auto; margin: 1.5em auto; border: 1px solid var(--border); border-radius: 8px; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }

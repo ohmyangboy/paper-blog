@@ -368,7 +368,7 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn("text-decoration-color: var(--link-underline)", home)
             self.assertIn('class="container home-container"', home)
             self.assertIn("@media (min-width: 48rem) { .home-container { margin-top: 4rem; } }", home)
-            self.assertIn("margin-inline: auto", home)
+            self.assertIn("margin: 1.5em auto", home)
             self.assertIn("border: 1px solid var(--border)", home)
 
     def test_build_site_only_includes_draft_assets_in_preview(self):
