@@ -41,7 +41,9 @@ DEFAULT_COLOR = "#D97757"
 DEFAULT_INDEX = "# Paper Blog\n\n写简单的文字，做干净的博客。\n"
 PAPER_PROJECT_URL = "https://ohmyangboy.github.io/paper-blog/"
 IMAGE_COMPRESSION_MIN_BYTES = 256 * 1024
-DEFAULT_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32"><rect width="100" height="100" rx="22" fill="#F9F9FB"/><path d="M 32 25 L 56 25 C 68 25 74 33 74 44 C 74 55 68 63 56 63 L 44 63 L 44 75" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M 44 37 L 55 37 C 62 37 65 40 65 44 C 65 48 62 51 55 51 Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><line x1="32" y1="25" x2="32" y2="75" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>'
+DEFAULT_ICON = "paper:default"
+DEFAULT_ICON_FILENAME = "paper-blog-favicon.png"
+LEGACY_DEFAULT_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32"><rect width="100" height="100" rx="22" fill="#F9F9FB"/><path d="M 32 25 L 56 25 C 68 25 74 33 74 44 C 74 55 68 63 56 63 L 44 63 L 44 75" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M 44 37 L 55 37 C 62 37 65 40 65 44 C 65 48 62 51 55 51 Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><line x1="32" y1="25" x2="32" y2="75" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>'
 _SAFE_SLUG = re.compile(r"[^\w\-\u4e00-\u9fff]+", re.UNICODE)
 _BOOLS = {"true": True, "false": False, "yes": True, "no": False}
 
@@ -60,7 +62,7 @@ class PaperConfig:
     site_name: str = DEFAULT_SITE_NAME
     site_url: str = ""
     color: str = DEFAULT_COLOR
-    icon: str = DEFAULT_ICON_SVG
+    icon: str = DEFAULT_ICON
     compress: bool = True
     schema_version: int = CONFIG_SCHEMA_VERSION
     config_path: Path | None = field(default=None, repr=False, compare=False)
@@ -169,6 +171,9 @@ def load_config(*, create: bool = False) -> PaperConfig:
             raise ConfigError(f"Paper 配置无法读取或不是有效 JSON：{source}") from None
 
     defaults = _default_config()
+    loaded_icon = str(loaded.get("icon") or DEFAULT_ICON)
+    if loaded_icon == LEGACY_DEFAULT_ICON_SVG:
+        loaded_icon = DEFAULT_ICON
     result = PaperConfig(
         posts_dir=_path_value(loaded.get("postsDir") or loaded.get("posts_dir"), defaults.posts_dir),
         site_dir=_path_value(loaded.get("siteDir") or loaded.get("repoDir") or loaded.get("site_dir"), defaults.site_dir),
@@ -178,7 +183,7 @@ def load_config(*, create: bool = False) -> PaperConfig:
         site_name=str(loaded.get("siteName") or loaded.get("site_name") or DEFAULT_SITE_NAME),
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
-        icon=str(loaded.get("icon") or DEFAULT_ICON_SVG),
+        icon=loaded_icon,
         compress=_bool_value(loaded.get("compress"), True),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=target,
@@ -822,7 +827,9 @@ def _github_url(config: PaperConfig) -> str:
 
 
 def _favicon_href(config: PaperConfig) -> str:
-    icon = config.icon.strip() or DEFAULT_ICON_SVG
+    icon = config.icon.strip() or DEFAULT_ICON
+    if icon == DEFAULT_ICON or icon == LEGACY_DEFAULT_ICON_SVG:
+        return _href(config, f"/assets/{DEFAULT_ICON_FILENAME}")
     lowered = icon.lower()
     if "<svg" in lowered:
         return "data:image/svg+xml;utf8," + quote(icon)
@@ -832,6 +839,20 @@ def _favicon_href(config: PaperConfig) -> str:
     if local_icon.startswith("assets/"):
         return _href(config, "/assets/" + local_icon.removeprefix("assets/"))
     return icon
+
+
+def _copy_default_icon(build_dir: Path, config: PaperConfig) -> None:
+    """Ship the official Paper icon when the user has not chosen a custom one."""
+
+    icon = config.icon.strip() or DEFAULT_ICON
+    if icon not in {DEFAULT_ICON, LEGACY_DEFAULT_ICON_SVG}:
+        return
+    source = Path(__file__).with_name("assets") / DEFAULT_ICON_FILENAME
+    if not source.is_file():
+        raise FileNotFoundError(f"Paper 默认图标缺失：{source}")
+    target = build_dir / "assets" / DEFAULT_ICON_FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
 
 
 def _live_reload_script() -> str:
@@ -974,9 +995,11 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             article += f'<div class="markdown">{rendered_content}</div></article></main>'
             _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
 
+        _copy_default_icon(temp_parent, config)
         _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress)
 
         author = _feed_author(config)
+        feed_title = f"{config.site_name} @{author}" if author else config.site_name
         site_home = _absolute_href(config, "/")
         feed_url = _absolute_href(config, "/rss.xml")
         feed_icon = _feed_icon_url(config)
@@ -1002,7 +1025,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
         if urlparse(feed_icon).scheme in {"http", "https"}:
             channel_image = (
                 f"<image><url>{html.escape(feed_icon)}</url>"
-                f"<title>{html.escape(config.site_name)}</title>"
+                f"<title>{html.escape(feed_title)}</title>"
                 f"<link>{html.escape(site_home)}</link></image>"
             )
         rss = (
@@ -1011,9 +1034,9 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             'xmlns:content="http://purl.org/rss/1.0/modules/content/" '
             'xmlns:dc="http://purl.org/dc/elements/1.1/" '
             'xmlns:atom="http://www.w3.org/2005/Atom">'
-            f"<channel><title>{html.escape(config.site_name)}</title>"
+            f"<channel><title>{html.escape(feed_title)}</title>"
             f"<link>{html.escape(site_home)}</link>"
-            f"<description>{html.escape(config.site_name)} 的最新文章</description>"
+            f"<description>{html.escape(feed_title)} 的最新文章</description>"
             "<language>zh-CN</language><generator>Paper Blog</generator>"
             f'<atom:link href="{html.escape(feed_url, quote=True)}" rel="self" type="application/rss+xml" />'
             f"{channel_creator}{channel_image}{''.join(rss_items)}</channel></rss>"

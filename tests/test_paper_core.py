@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from paper_runtime.core import (
+    DEFAULT_ICON,
+    LEGACY_DEFAULT_ICON_SVG,
     GitRemoteInfo,
     PaperConfig,
     _base_path,
@@ -16,6 +18,7 @@ from paper_runtime.core import (
     _site_root,
     build_site,
     discover_posts,
+    load_config,
     normalize_git_remote,
     parse_frontmatter,
     render_markdown,
@@ -23,6 +26,21 @@ from paper_runtime.core import (
 
 
 class PaperCoreTests(unittest.TestCase):
+    def test_legacy_default_icon_migrates_to_official_zine_icon(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            os.environ["PAPER_HOME"] = str(Path(root) / ".paper")
+            config_file = Path(os.environ["PAPER_HOME"]) / "config.json"
+            config_file.parent.mkdir(parents=True)
+            config_file.write_text(json.dumps({"icon": LEGACY_DEFAULT_ICON_SVG}), encoding="utf-8")
+            try:
+                self.assertEqual(load_config().icon, DEFAULT_ICON)
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
     def test_frontmatter_without_published_is_a_draft(self):
         metadata, body = parse_frontmatter("---\ntitle: Private note\n---\n\nsecret")
         self.assertEqual(metadata["title"], "Private note")
@@ -437,6 +455,7 @@ class PaperCoreTests(unittest.TestCase):
             )
             rss = (output / "rss.xml").read_text(encoding="utf-8")
             sitemap = (output / "sitemap.xml").read_text(encoding="utf-8")
+            self.assertIn("<channel><title>Paper Blog</title>", rss)
             self.assertIn("https://alice.github.io/blog/posts/hello/", rss)
             self.assertNotIn("/blog/blog/", rss)
             self.assertIn("https://alice.github.io/blog/", sitemap)
@@ -467,8 +486,12 @@ class PaperCoreTests(unittest.TestCase):
             channel = feed.getroot().find("channel")
             self.assertIsNotNone(channel)
             assert channel is not None
+            self.assertEqual(channel.findtext("title"), "Paper Blog @ohmyangboy")
             self.assertEqual(channel.findtext("link"), "https://ohmyangboy.github.io/blog/")
-            self.assertTrue(channel.findtext("description"))
+            self.assertEqual(
+                channel.findtext("description"),
+                "Paper Blog @ohmyangboy 的最新文章",
+            )
             self.assertEqual(
                 channel.findtext("{http://purl.org/dc/elements/1.1/}creator"),
                 "ohmyangboy",
@@ -477,6 +500,7 @@ class PaperCoreTests(unittest.TestCase):
                 channel.findtext("image/url"),
                 "https://ohmyangboy.github.io/blog/assets/favicon.ico",
             )
+            self.assertEqual(channel.findtext("image/title"), "Paper Blog @ohmyangboy")
             item = channel.find("item")
             self.assertIsNotNone(item)
             assert item is not None
@@ -517,7 +541,8 @@ class PaperCoreTests(unittest.TestCase):
             )
             self.assertIn('font-family: Georgia, Cambria, Baskerville', home)
             self.assertIn('rel="icon"', home)
-            self.assertIn('data:image/svg+xml', home)
+            self.assertIn('/assets/paper-blog-favicon.png', home)
+            self.assertTrue((output / "assets" / "paper-blog-favicon.png").exists())
             self.assertIn('/.paper-revision', home)
 
     def test_writing_rss_link_respects_site_base_path(self):

@@ -26,11 +26,12 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from paper_runtime.core import (
     ConfigError,
     DEFAULT_COLOR,
-    DEFAULT_ICON_SVG,
+    DEFAULT_ICON,
     DEFAULT_INDEX,
     GitRemoteInfo,
     PaperConfig,
@@ -46,7 +47,7 @@ from paper_runtime.core import (
     set_post_published,
 )
 
-VERSION = "0.1.1-beta.3"
+VERSION = "0.1.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -56,6 +57,8 @@ RESET = "\033[0m"
 PAPER_BANNER = f"  {TERRACOTTA}Paper{RESET} {BOLD}Blog{RESET}"
 PREVIEW_POLL_SECONDS = 0.5
 PREVIEW_DEBOUNCE_SECONDS = 2.0
+UPDATE_CHECK_TTL_SECONDS = 6 * 60 * 60
+UPDATE_RELEASES_URL = "https://api.github.com/repos/ohmyangboy/paper-blog/releases?per_page=10"
 _ALT_SCREEN_ENTER = "\033[?1049h"
 _ALT_SCREEN_LEAVE = "\033[?1049l"
 _alt_screen_depth = 0
@@ -391,7 +394,7 @@ def _set_icon(config: PaperConfig) -> PaperConfig:
         ],
     )
     if icon_action == "default":
-        return save_config(config, icon=DEFAULT_ICON_SVG)
+        return save_config(config, icon=DEFAULT_ICON)
     if icon_action == "file":
         source = _file_picker()
         if source is None:
@@ -444,7 +447,7 @@ def _set_image_compression(config: PaperConfig, state: str | None = None) -> Pap
 
 def cmd_brand_config(config: PaperConfig) -> int:
     while True:
-        icon_label = "预设 P 图标" if config.icon.strip() == DEFAULT_ICON_SVG else "已自定义"
+        icon_label = "Paper zine 图标" if config.icon.strip() == DEFAULT_ICON else "已自定义"
         action = _terminal_menu(
             "🏠 Home · 首页与品牌\n（使用 ↑/↓ 移动，enter 确认，esc 返回上一级）",
             [
@@ -1449,6 +1452,55 @@ def _version_key(value: str) -> tuple[int, ...]:
     return tuple(parts + [rank * 1000 + (int(number.group(0)) if number else 0)])
 
 
+def _latest_available_version() -> str | None:
+    """Return the newest GitHub release, using a short-lived local cache."""
+
+    cache_path = config_path().parent / "update-check.json"
+    cached_version: str | None = None
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        cached_version = str(cached.get("latest") or "") or None
+        checked_at = float(cached.get("checkedAt") or 0)
+        if cached_version and time.time() - checked_at < UPDATE_CHECK_TTL_SECONDS:
+            return cached_version
+    except (OSError, TypeError, ValueError):
+        pass
+
+    request = Request(
+        UPDATE_RELEASES_URL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": f"Paper/{VERSION}"},
+    )
+    try:
+        with urlopen(request, timeout=2) as response:
+            releases = json.loads(response.read().decode("utf-8"))
+        versions = [
+            str(release.get("tag_name") or "").strip().removeprefix("v")
+            for release in releases
+            if isinstance(release, dict) and not release.get("draft")
+        ]
+        versions = [version for version in versions if re.fullmatch(r"\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?", version)]
+        if not versions:
+            return cached_version
+        latest = max(versions, key=_version_key)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps({"checkedAt": time.time(), "latest": latest}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return latest
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return cached_version
+
+
+def _startup_update_notice() -> str:
+    """Build the non-blocking update notice shown above the dashboard."""
+
+    latest = _latest_available_version()
+    if latest and _version_key(latest) > _version_key(VERSION):
+        return f"🆕 Paper {latest} 新版本可用，请使用 `paper update` 命令升级。"
+    return ""
+
+
 def _is_homebrew_install() -> bool:
     try:
         return "/Cellar/paper/" in os.path.realpath(sys.argv[0])
@@ -1538,13 +1590,17 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_dashboard() -> int:
+def run_dashboard(startup_notice: str = "") -> int:
     exit_armed = False
     enter_alt_screen()
     try:
         while True:
             action = _terminal_menu(
-                "请使用方向键导航，Enter 或数字键选择对应的功能：",
+                (
+                    f"{startup_notice}\n\n请使用方向键导航，Enter 或数字键选择对应的功能："
+                    if startup_notice
+                    else "请使用方向键导航，Enter 或数字键选择对应的功能："
+                ),
                 [
                     ("list", "list", "管理文章"),
                     ("new", "new", "新建文章并打开编辑器"),
@@ -1590,7 +1646,7 @@ def run_dashboard() -> int:
 def _main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
     if not raw_argv and sys.stdin.isatty():
-        return run_dashboard()
+        return run_dashboard(_startup_update_notice())
     args = make_parser().parse_args(raw_argv)
     command = args.command
     if command == "init": return cmd_init()

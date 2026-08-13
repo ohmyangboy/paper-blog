@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-ssg"
-version = "0.1.1-beta.3"
+version = "0.1.1"
 description = "A minimal Python static site generator and writing CLI"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
 dependencies = [
   "markdown-it-py==4.2.0",
   "Pygments==2.20.0",
@@ -18,3 +19,6 @@ paper = "paper_cli:main"
 [tool.setuptools]
 py-modules = ["paper_cli"]
 packages = ["paper_runtime"]
+
+[tool.setuptools.package-data]
+paper_runtime = ["assets/*.png"]

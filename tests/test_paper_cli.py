@@ -26,6 +26,8 @@ from paper_cli import (
     _open_editor,
     _read_terminal_key,
     _terminal_menu,
+    _latest_available_version,
+    _startup_update_notice,
     _version_key,
     _watch_preview,
     _with_spinner,
@@ -55,10 +57,12 @@ def _init_with_origin(site_dir: Path, remote: str, gh_pages: bool = False) -> No
 class PaperCliTests(unittest.TestCase):
     def test_no_argument_interactive_run_opens_dashboard(self):
         with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "paper_cli._startup_update_notice", return_value="new version"
+        ), mock.patch(
             "paper_cli.run_dashboard", return_value=0, create=True
         ) as dashboard:
             self.assertEqual(main([]), 0)
-            dashboard.assert_called_once_with()
+            dashboard.assert_called_once_with("new version")
 
     def test_terminal_reader_keeps_arrow_escape_sequence_together(self):
         with mock.patch("sys.stdin.fileno", return_value=7), mock.patch(
@@ -98,6 +102,14 @@ class PaperCliTests(unittest.TestCase):
         self.assertEqual(menu.call_count, 2)
         self.assertEqual(menu.call_args_list[0].kwargs["footer_message"], "")
         self.assertIn("再按一次", menu.call_args_list[1].kwargs["footer_message"])
+
+    def test_dashboard_prints_update_notice_above_menu(self):
+        paper_cli._alt_screen_depth = 0
+        with mock.patch("paper_cli._terminal_menu", return_value="quit") as menu, mock.patch(
+            "sys.stdout.isatty", return_value=False
+        ):
+            self.assertEqual(run_dashboard("🆕 Paper 9.9.9 新版本可用"), 0)
+        self.assertIn("Paper 9.9.9 新版本可用", menu.call_args.args[0])
 
     def test_ctrl_c_exits_without_traceback(self):
         output = io.StringIO()
@@ -366,6 +378,31 @@ class PaperCliTests(unittest.TestCase):
         self.assertGreater(_version_key("0.1.1-beta.2"), _version_key("0.1.1-beta.1"))
         self.assertGreater(_version_key("0.1.1-beta.1"), _version_key("0.1.0"))
         self.assertEqual(_version_key("0.1.1-beta.1"), _version_key("0.1.1-beta.1"))
+
+    def test_startup_update_notice_reports_newer_release(self):
+        with mock.patch("paper_cli._latest_available_version", return_value="0.1.2"):
+            self.assertIn("paper update", _startup_update_notice())
+        with mock.patch("paper_cli._latest_available_version", return_value=paper_cli.VERSION):
+            self.assertEqual(_startup_update_notice(), "")
+
+    def test_latest_version_check_uses_six_hour_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            os.environ["PAPER_HOME"] = str(Path(root) / ".paper")
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = (
+                b'[{"tag_name":"v0.1.2","draft":false},{"tag_name":"v0.1.1-beta.4","draft":false}]'
+            )
+            try:
+                with mock.patch("paper_cli.urlopen", return_value=response) as open_url:
+                    self.assertEqual(_latest_available_version(), "0.1.2")
+                    self.assertEqual(_latest_available_version(), "0.1.2")
+                open_url.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
 
     def test_publish_keeps_published_state_when_deploy_cannot_run(self):
         with tempfile.TemporaryDirectory() as root:
