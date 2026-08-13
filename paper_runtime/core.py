@@ -698,9 +698,9 @@ footer { margin-top: 4rem; text-align: center; }
 .back-icon:hover { color: var(--primary); }
 
 /* Markdown Profile additions: syntax support without changing the site shell. */
-.markdown { font-size: 1rem; line-height: 1.8; }
+.markdown { font-size: 1rem; line-height: 1.5; }
 .markdown > * + * { margin-top: 1.25rem; }
-.markdown > .markdown-blank-line { height: 1.8em; margin-top: 0; }
+.markdown > .markdown-blank-line { height: 1.5em; margin-top: 0; }
 .markdown > .markdown-blank-line + * { margin-top: 0; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-weight: 650; line-height: 1.35; letter-spacing: -0.02em; color: var(--text); text-transform: none; }
 .markdown h1 { font-size: 1.75rem; margin-top: 2.5rem; }

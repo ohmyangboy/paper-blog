@@ -361,6 +361,7 @@ class PaperCoreTests(unittest.TestCase):
             home = (output / "index.html").read_text(encoding="utf-8")
             self.assertTrue((output / "assets" / "favicon.png").exists())
             self.assertIn("letter-spacing: 0.02em", home)
+            self.assertIn("line-height: 1.5", home)
             self.assertIn("margin-inline: auto", home)
             self.assertIn("border: 1px solid var(--border)", home)
 
