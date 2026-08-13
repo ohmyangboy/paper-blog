@@ -188,7 +188,7 @@ def _terminal_menu(
         while True:
             _clear_screen()
             print(PAPER_BANNER)
-            print(f"\n{title}\n")
+            print(f"\n  {title}\n")
             start, end = _menu_window(len(options), selected, reserved_lines=7 + title.count("\n") + bool(footer_message))
             if start:
                 print(f"{GRAY}  ↑ 还有 {start} 项{RESET}")
@@ -202,9 +202,9 @@ def _terminal_menu(
                 print(f"{prefix}  {rendered_label}  {rendered_desc}")
             if end < len(options):
                 print(f"{GRAY}  ↓ 还有 {len(options) - end} 项{RESET}")
-            print(f"\n{GRAY}↑↓ / kj  |  enter 选择  |  数字键直达  |  esc / q 返回{RESET}")
+            print(f"\n  {GRAY}↑↓ / kj  |  enter 选择  |  数字键直达  |  esc / q 返回{RESET}")
             if footer_message:
-                print(f"{TERRACOTTA}{footer_message}{RESET}")
+                print(f"  {TERRACOTTA}{footer_message}{RESET}")
             sys.stdout.flush()
             key = _read_terminal_key()
             if key in {"\x1b[A", "k", "K"}:
@@ -238,7 +238,7 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
         while True:
             _clear_screen()
             print(PAPER_BANNER)
-            print(f"\n{title}\n")
+            print(f"\n  {title}\n")
             start, end = _menu_window(len(options), selected_index, reserved_lines=7 + title.count("\n"))
             if start:
                 print(f"{GRAY}  ↑ 还有 {start} 项{RESET}")
@@ -251,7 +251,7 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
                 print(f"{prefix} {rendered}  {GRAY}{description}{RESET}")
             if end < len(options):
                 print(f"{GRAY}  ↓ 还有 {len(options) - end} 项{RESET}")
-            print(f"\n{GRAY}空格勾选  |  ↑↓ / kj 移动  |  enter 提交  |  esc / q 取消{RESET}")
+            print(f"\n  {GRAY}空格勾选  |  ↑↓ / kj 移动  |  enter 提交  |  esc / q 取消{RESET}")
             sys.stdout.flush()
             key = _read_terminal_key()
             if key in {"\x1b[A", "k", "K"}:

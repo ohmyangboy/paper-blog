@@ -47,4 +47,4 @@ GitHub Pages 发布需要用户先提供已有仓库和 Git 凭据；Paper 只�
 
 ## 当前发布边界
 
-Python CLI 和静态构建链已经是当前主实现。仓库中遗留的 `app/`、`components/`、`lib/`、`bin/paper.mjs`、`package.json` 和 `node_modules/` 属于早期 Next.js 原型，不参与 `paper.py`/`paper` 的运行；正式发布前应删除或移入明确的 legacy 目录。`Formula/paper.rb` 也必须等 GitHub tag 和真实源码校验和生成后才能提交到 Homebrew tap，不能使用占位 URL 或 sha256。
+Python CLI 和静态构建链是唯一实现；早期 Next.js 原型（`app/`、`components/`、`lib/`、`bin/paper.mjs`、`package.json` 等）已在发布前移除，仓库只保留 Python 一条构建链。`Formula/paper.rb` 基于真实 GitHub tag 与源码校验和，通过 Homebrew tap（`ohmyangboy/tap/paper`）分发。
