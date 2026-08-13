@@ -527,7 +527,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown li { margin: 0.25rem 0; }
 .markdown li > p { margin: 0; }
 .markdown li > ul, .markdown li > ol { margin-top: 0.25rem; }
-.markdown a { color: var(--primary); text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+.markdown a { text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
 .markdown pre { position: relative; margin: 0; font-size: 0.875em; line-height: 1.7; }
 .markdown pre code { display: block; padding: 0; background-color: transparent; font-size: inherit; }
 .markdown blockquote { margin: 0; }
