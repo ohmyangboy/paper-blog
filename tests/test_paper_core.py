@@ -2,12 +2,16 @@ import json
 import os
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from paper_runtime.core import (
     GitRemoteInfo,
     PaperConfig,
     _base_path,
+    _compress_output_image,
     _github_url,
     _site_root,
     build_site,
@@ -370,6 +374,33 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn("@media (min-width: 48rem) { .home-container { margin-top: 4rem; } }", home)
             self.assertIn("margin-inline: auto", home)
             self.assertIn("border: 1px solid var(--border)", home)
+            self.assertIn('class="image-lightbox"', home)
+            self.assertIn("showModal", home)
+            self.assertIn("cursor: zoom-in", home)
+            self.assertIn("i.closest('a')", home)
+
+    def test_output_image_compression_replaces_only_the_build_copy_when_smaller(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "source.jpg"
+            target = root_path / "out" / "source.jpg"
+            source.write_bytes(b"original" * 40_000)
+            target.parent.mkdir()
+            target.write_bytes(source.read_bytes())
+
+            def fake_sips(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                Path(command[-1]).write_bytes(b"compressed")
+                return SimpleNamespace(returncode=0)
+
+            with mock.patch("paper_runtime.core.shutil.which", return_value="/usr/bin/sips"), mock.patch(
+                "paper_runtime.core.subprocess.run", side_effect=fake_sips
+            ) as run:
+                self.assertTrue(_compress_output_image(source, target))
+
+            self.assertEqual(source.read_bytes(), b"original" * 40_000)
+            self.assertEqual(target.read_bytes(), b"compressed")
+            self.assertIn("-Z", run.call_args.args[0])
+            self.assertIn("formatOptions", run.call_args.args[0])
 
     def test_build_site_only_includes_draft_assets_in_preview(self):
         with tempfile.TemporaryDirectory() as root:
@@ -410,6 +441,63 @@ class PaperCoreTests(unittest.TestCase):
             self.assertNotIn("/blog/blog/", rss)
             self.assertIn("https://alice.github.io/blog/", sitemap)
 
+    def test_rss_contains_full_content_absolute_images_author_and_public_icon(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            assets = posts / "assets"
+            assets.mkdir(parents=True)
+            (assets / "cover.png").write_bytes(b"cover")
+            (assets / "favicon.ico").write_bytes(b"icon")
+            (posts / "你好-世界.md").write_text(
+                "---\ntitle: 你好世界\ndate: '2026-08-13'\npublished: true\n---\n\n"
+                "完整正文。\n\n![封面](assets/cover.png)",
+                encoding="utf-8",
+            )
+            output = build_site(
+                PaperConfig(
+                    posts_dir=posts,
+                    site_dir=root_path / "site",
+                    git_remote="git@github.com:ohmyangboy/blog.git",
+                    icon="assets/favicon.ico",
+                )
+            )
+
+            feed = ET.parse(output / "rss.xml")
+            channel = feed.getroot().find("channel")
+            self.assertIsNotNone(channel)
+            assert channel is not None
+            self.assertEqual(channel.findtext("link"), "https://ohmyangboy.github.io/blog/")
+            self.assertTrue(channel.findtext("description"))
+            self.assertEqual(
+                channel.findtext("{http://purl.org/dc/elements/1.1/}creator"),
+                "ohmyangboy",
+            )
+            self.assertEqual(
+                channel.findtext("image/url"),
+                "https://ohmyangboy.github.io/blog/assets/favicon.ico",
+            )
+            item = channel.find("item")
+            self.assertIsNotNone(item)
+            assert item is not None
+            full_content = item.findtext("{http://purl.org/rss/1.0/modules/content/}encoded") or ""
+            description = item.findtext("description") or ""
+            absolute_image = 'src="https://ohmyangboy.github.io/blog/assets/cover.png"'
+            self.assertIn("完整正文。", full_content)
+            self.assertIn(absolute_image, full_content)
+            self.assertIn(absolute_image, description)
+            self.assertEqual(
+                item.findtext("{http://purl.org/dc/elements/1.1/}creator"),
+                "ohmyangboy",
+            )
+            self.assertEqual(
+                item.findtext("guid"),
+                "https://ohmyangboy.github.io/blog/posts/你好-世界/",
+            )
+            self.assertTrue((item.findtext("pubDate") or "").endswith("GMT"))
+            self.assertTrue((output / "assets" / "cover.png").exists())
+            self.assertTrue((output / "assets" / "favicon.ico").exists())
+
     def test_build_restores_legacy_footer_and_can_inject_live_reload(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -422,7 +510,11 @@ class PaperCoreTests(unittest.TestCase):
             home = (output / "index.html").read_text(encoding="utf-8")
             self.assertIn('class="footer-brand"', home)
             self.assertIn('<div class="writing-header"><h2>Writing</h2><a href="/rss.xml" class="footer-brand">RSS</a></div>', home)
-            self.assertIn('class="footer-brand">Paper Blog</a></footer>', home)
+            self.assertIn(
+                'href="https://ohmyangboy.github.io/paper-blog/" target="_blank" '
+                'rel="noopener noreferrer" class="footer-brand">Paper Blog</a></footer>',
+                home,
+            )
             self.assertIn('font-family: Georgia, Cambria, Baskerville', home)
             self.assertIn('rel="icon"', home)
             self.assertIn('data:image/svg+xml', home)
@@ -467,6 +559,26 @@ class PaperCoreTests(unittest.TestCase):
                 config_file.write_text("{broken", encoding="utf-8")
                 with self.assertRaises(ConfigError):
                     load_config()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_existing_config_without_compress_defaults_to_enabled(self):
+        from paper_runtime.core import load_config
+
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            os.environ["PAPER_HOME"] = str(Path(root) / ".paper")
+            try:
+                config_file = Path(os.environ["PAPER_HOME"]) / "config.json"
+                config_file.parent.mkdir(parents=True)
+                config_file.write_text(
+                    json.dumps({"postsDir": str(Path(root) / "posts")}),
+                    encoding="utf-8",
+                )
+                self.assertTrue(load_config().compress)
             finally:
                 if old_home is None:
                     os.environ.pop("PAPER_HOME", None)

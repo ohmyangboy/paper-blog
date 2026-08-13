@@ -40,11 +40,15 @@ Paper 使用 `markdown-it-py` 的 CommonMark 基线，并启用表格、删除�
 
 Obsidian 图片支持 `![[image.png]]`、`![[image.png|说明]]`、`![[image.png|300]]` 和 `![[image.png|300x200]]`。明确的相对路径优先；只有文件名时会递归查找已关联的文章目录，文件名必须唯一。找不到图片时页面显示占位提示，重名时构建会要求补充路径。Paper 不搜索关联目录之外的附件，也不展开 `![[笔记]]`。
 
-正文图片默认居中显示，使用 8px 轻圆角和跟随明暗主题的 1px 淡描边；窄屏下保持等比缩放。
+正文图片默认居中显示，使用 8px 轻圆角和跟随明暗主题的 1px 淡描边；窄屏下保持等比缩放。单击普通正文图片会在当前页面打开大图，可点击背景、关闭按钮或按 Esc 退出；本身带链接的图片仍按原链接跳转。
 
 选择 Obsidian 作为编辑器后，位于 Obsidian vault 内的文章会通过 Obsidian URI 作为库内笔记打开，以便索引、内部链接和附件按 vault 工作；不在 vault 内的文件仍按普通文件打开。Paper 不控制 Obsidian 左侧文件树是否自动展开。
 
 `paper config` 可通过方向键设置主题高亮颜色、默认编辑器和 favicon。favicon 支持内置 P 图标、SVG/Data URI、图片 URL，或将本地图片复制到 `assets/`。
+
+图片压缩默认开启，可在 `paper config` 的「图片压缩」中切换，也可直接执行 `paper config compress on` 或 `paper config compress off`。压缩仅处理构建/预览输出副本，不修改文章目录原图；大于 256KB 的 PNG 最长边限制为 1000px，JPEG 最长边限制为 2000px 并使用约 82 的质量。只有生成文件确实更小时才替换输出；GIF、SVG、WebP、ICO 以及系统压缩失败的图片会原样保留。
+
+生成的 RSS 2.0 同时提供标准 `description` 与 `content:encoded` 完整正文，正文中的站内链接和图片会转换为可在阅读器中直接访问的绝对 URL。频道和文章作者默认从 GitHub remote 的仓库所有者推断，并写入 `dc:creator`；配置了可公开访问的 favicon 时，RSS 也会输出频道 `image`。网页底部的 Paper Blog 品牌链接固定指向 Paper 项目网站。
 
 ## 运行数据边界
 

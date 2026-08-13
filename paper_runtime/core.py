@@ -9,8 +9,10 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
@@ -33,10 +35,12 @@ except ImportError:  # pragma: no cover - exercised by doctor/packaging tests
         pass
 
 
-CONFIG_SCHEMA_VERSION = 1
+CONFIG_SCHEMA_VERSION = 2
 DEFAULT_SITE_NAME = "Paper Blog"
 DEFAULT_COLOR = "#D97757"
 DEFAULT_INDEX = "# Paper Blog\n\n写简单的文字，做干净的博客。\n"
+PAPER_PROJECT_URL = "https://ohmyangboy.github.io/paper-blog/"
+IMAGE_COMPRESSION_MIN_BYTES = 256 * 1024
 DEFAULT_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32"><rect width="100" height="100" rx="22" fill="#F9F9FB"/><path d="M 32 25 L 56 25 C 68 25 74 33 74 44 C 74 55 68 63 56 63 L 44 63 L 44 75" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M 44 37 L 55 37 C 62 37 65 40 65 44 C 65 48 62 51 55 51 Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><line x1="32" y1="25" x2="32" y2="75" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>'
 _SAFE_SLUG = re.compile(r"[^\w\-\u4e00-\u9fff]+", re.UNICODE)
 _BOOLS = {"true": True, "false": False, "yes": True, "no": False}
@@ -57,6 +61,7 @@ class PaperConfig:
     site_url: str = ""
     color: str = DEFAULT_COLOR
     icon: str = DEFAULT_ICON_SVG
+    compress: bool = True
     schema_version: int = CONFIG_SCHEMA_VERSION
     config_path: Path | None = field(default=None, repr=False, compare=False)
 
@@ -141,6 +146,14 @@ def _path_value(value: Any, fallback: Path) -> Path:
     return Path(str(value)).expanduser().resolve()
 
 
+def _bool_value(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in _BOOLS:
+        return _BOOLS[value.strip().lower()]
+    return fallback
+
+
 def load_config(*, create: bool = False) -> PaperConfig:
     """Load the single-site config, migrating the old flat config once."""
 
@@ -166,6 +179,7 @@ def load_config(*, create: bool = False) -> PaperConfig:
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=str(loaded.get("icon") or DEFAULT_ICON_SVG),
+        compress=_bool_value(loaded.get("compress"), True),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=target,
     )
@@ -193,6 +207,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         "site_url": current.site_url,
         "color": current.color,
         "icon": current.icon,
+        "compress": current.compress,
         "schema_version": CONFIG_SCHEMA_VERSION,
         "config_path": config_path(),
     }
@@ -213,6 +228,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         site_url=str(values["site_url"]),
         color=str(values["color"]),
         icon=str(values["icon"]),
+        compress=bool(values["compress"]),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=config_path(),
     )
@@ -636,6 +652,55 @@ def _absolute_href(config: PaperConfig, path: str) -> str:
     return f"{root}{path}" if root else _href(config, path)
 
 
+def _absolute_url(config: PaperConfig, href: str) -> str:
+    """Resolve a generated root-relative URL without repeating the Pages base path."""
+
+    parsed_href = urlparse(href)
+    if parsed_href.scheme:
+        return href
+    root = _site_root(config)
+    parsed_root = urlparse(root)
+    if parsed_root.scheme and parsed_root.netloc and href.startswith("/"):
+        return f"{parsed_root.scheme}://{parsed_root.netloc}{href}"
+    if root:
+        return f"{root}/{href.lstrip('/')}"
+    return href
+
+
+def _absolute_document_urls(config: PaperConfig, rendered: str) -> str:
+    """Make local links and images portable outside the website in RSS readers."""
+
+    pattern = re.compile(r'(?P<attribute>\b(?:href|src))="(?P<url>/[^"#]*)"')
+
+    def replace(match: re.Match[str]) -> str:
+        absolute = _absolute_url(config, html.unescape(match.group("url")))
+        return f'{match.group("attribute")}="{html.escape(absolute, quote=True)}"'
+
+    return pattern.sub(replace, rendered)
+
+
+def _feed_author(config: PaperConfig) -> str:
+    info = normalize_git_remote(config.git_remote)
+    return info.owner if info else ""
+
+
+def _rss_date(value: str) -> str:
+    try:
+        parsed = _dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return format_datetime(parsed.astimezone(_dt.timezone.utc), usegmt=True)
+
+
+def _feed_icon_url(config: PaperConfig) -> str:
+    favicon = _favicon_href(config)
+    if favicon.startswith("data:"):
+        return ""
+    return _absolute_url(config, favicon)
+
+
 def _css(config: PaperConfig) -> str:
     color = config.color if re.match(r"^#[0-9a-fA-F]{6}$", config.color) else DEFAULT_COLOR
     legacy_css = """
@@ -728,8 +793,12 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown tbody tr:nth-child(even) td { background-color: var(--code-bg); }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
-.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; }
+.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; cursor: zoom-in; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
+.image-lightbox { width: 100vw; max-width: none; height: 100vh; max-height: none; padding: 3rem; border: 0; background: transparent; overflow: hidden; }
+.image-lightbox::backdrop { background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(6px); }
+.image-lightbox img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.image-lightbox-close { position: fixed; top: 1rem; right: 1rem; width: 2.5rem; height: 2.5rem; border: 0; border-radius: 999px; background: rgba(0, 0, 0, 0.62); color: white; font-size: 1.5rem; line-height: 1; cursor: pointer; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }
 @media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } }
@@ -769,13 +838,18 @@ def _live_reload_script() -> str:
     return """<script>(()=>{let v=null;setInterval(async()=>{try{const r=await fetch('/.paper-revision',{cache:'no-store'});const n=await r.text();if(v===null){v=n}else if(n!==v){location.reload()}}catch(_e){}},1000)})();</script>"""
 
 
+def _image_lightbox() -> str:
+    return """<dialog class="image-lightbox" aria-label="图片大图预览"><button class="image-lightbox-close" type="button" aria-label="关闭大图">×</button><img alt=""></dialog><script>(()=>{const d=document.querySelector('.image-lightbox');const v=d.querySelector('img');document.addEventListener('click',e=>{const i=e.target.closest?.('.markdown img');if(!i||i.closest('a'))return;const s=i.currentSrc||i.src;if(typeof d.showModal!=='function'){window.open(s,'_blank','noopener');return}v.src=s;v.alt=i.alt||'';d.showModal()});d.querySelector('.image-lightbox-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{if(e.target===d)d.close()});d.addEventListener('close',()=>{v.removeAttribute('src')})})();</script>"""
+
+
 def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False) -> str:
     marker = '<p><strong>草稿预览</strong></p>' if draft else ""
     script = _live_reload_script() if live_reload else ""
     favicon = html.escape(_favicon_href(config), quote=True)
+    lightbox = _image_lightbox()
     page_title = config.site_name if title == config.site_name else f"{title} | {config.site_name}"
     container_class = "container home-container" if home else "container"
-    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\"><title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{html.escape(_github_url(config), quote=True)}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{script}</body></html>"""
+    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\"><title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{PAPER_PROJECT_URL}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{lightbox}{script}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -783,7 +857,56 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _copy_referenced_assets(build_dir: Path, posts_dir: Path, asset_base: str) -> None:
+def _compress_output_image(source: Path, target: Path) -> bool:
+    """Create a smaller macOS-optimized copy, preserving the source image."""
+
+    suffix = source.suffix.lower()
+    if (
+        suffix not in {".jpg", ".jpeg", ".png"}
+        or source.stat().st_size < IMAGE_COMPRESSION_MIN_BYTES
+        or shutil.which("sips") is None
+    ):
+        return False
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".paper-compress-",
+        suffix=suffix,
+        dir=target.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    temporary.unlink(missing_ok=True)
+    max_edge = "1000" if suffix == ".png" else "2000"
+    command = ["sips", "-Z", max_edge]
+    if suffix in {".jpg", ".jpeg"}:
+        command.extend(["-s", "formatOptions", "82"])
+    command.extend([str(source), "--out", str(temporary)])
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+        if result.returncode != 0 or not temporary.is_file():
+            return False
+        if temporary.stat().st_size >= target.stat().st_size:
+            return False
+        os.replace(temporary, target)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _copy_referenced_assets(
+    build_dir: Path,
+    posts_dir: Path,
+    asset_base: str,
+    *,
+    compress: bool,
+) -> None:
     """Copy only assets referenced by generated HTML into the build output."""
 
     assets = posts_dir / "assets"
@@ -808,6 +931,8 @@ def _copy_referenced_assets(build_dir: Path, posts_dir: Path, asset_base: str) -
         target = build_dir / "assets" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+        if compress:
+            _compress_output_image(source, target)
 
 
 def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload: bool = False) -> Path:
@@ -838,23 +963,61 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
         index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
         _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
         _write(temp_parent / "404.html", _layout(config, "Not found", "<main><h1>Not found</h1></main>", live_reload=live_reload))
+        rendered_posts: dict[str, str] = {}
         for post in posts:
             if not post.published and not include_drafts:
                 continue
+            rendered_content = render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)
+            rendered_posts[post.slug] = rendered_content
             back_icon = '<a href="javascript:history.back()" class="back-icon" title="返回上一页" aria-label="返回上一页"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
             article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
-            article += f'<div class="markdown">{render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)}</div></article></main>'
+            article += f'<div class="markdown">{rendered_content}</div></article></main>'
             _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
 
-        _copy_referenced_assets(temp_parent, posts_dir, asset_base)
+        _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress)
 
-        rss_items = []
+        author = _feed_author(config)
+        site_home = _absolute_href(config, "/")
+        feed_url = _absolute_href(config, "/rss.xml")
+        feed_icon = _feed_icon_url(config)
+        rss_items: list[str] = []
         sitemap_urls = [_absolute_href(config, "/")]
         for post in published:
             url = _absolute_href(config, f"/posts/{post.slug}/")
-            rss_items.append(f"<item><title>{html.escape(post.title)}</title><link>{html.escape(url)}</link><pubDate>{html.escape(post.date)}</pubDate><description>{html.escape(post.description)}</description></item>")
+            full_content = _absolute_document_urls(config, rendered_posts[post.slug])
+            creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
+            rss_items.append(
+                f"<item><title>{html.escape(post.title)}</title>"
+                f"<link>{html.escape(url)}</link>"
+                f'<guid isPermaLink="true">{html.escape(url)}</guid>'
+                f"<pubDate>{html.escape(_rss_date(post.date))}</pubDate>"
+                f"{creator}"
+                f"<description>{html.escape(full_content)}</description>"
+                f"<content:encoded>{html.escape(full_content)}</content:encoded>"
+                "</item>"
+            )
             sitemap_urls.append(url)
-        rss = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>" + html.escape(config.site_name) + "</title>" + "".join(rss_items) + "</channel></rss>"
+        channel_creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
+        channel_image = ""
+        if urlparse(feed_icon).scheme in {"http", "https"}:
+            channel_image = (
+                f"<image><url>{html.escape(feed_icon)}</url>"
+                f"<title>{html.escape(config.site_name)}</title>"
+                f"<link>{html.escape(site_home)}</link></image>"
+            )
+        rss = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<rss version="2.0" '
+            'xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:atom="http://www.w3.org/2005/Atom">'
+            f"<channel><title>{html.escape(config.site_name)}</title>"
+            f"<link>{html.escape(site_home)}</link>"
+            f"<description>{html.escape(config.site_name)} 的最新文章</description>"
+            "<language>zh-CN</language><generator>Paper Blog</generator>"
+            f'<atom:link href="{html.escape(feed_url, quote=True)}" rel="self" type="application/rss+xml" />'
+            f"{channel_creator}{channel_image}{''.join(rss_items)}</channel></rss>"
+        )
         _write(temp_parent / "rss.xml", rss)
         sitemap = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" + "".join(f"<url><loc>{html.escape(url)}</loc></url>" for url in sitemap_urls) + "</urlset>"
         _write(temp_parent / "sitemap.xml", sitemap)

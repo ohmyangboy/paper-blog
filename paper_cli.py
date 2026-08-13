@@ -35,6 +35,7 @@ from paper_runtime.core import (
     GitRemoteInfo,
     PaperConfig,
     Post,
+    _base_path,
     build_site,
     config_path,
     discover_posts,
@@ -45,7 +46,7 @@ from paper_runtime.core import (
     set_post_published,
 )
 
-VERSION = "0.1.1-beta.2"
+VERSION = "0.1.1-beta.3"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -423,6 +424,24 @@ def _choose_editor(config: PaperConfig) -> PaperConfig:
     return config
 
 
+def _set_image_compression(config: PaperConfig, state: str | None = None) -> PaperConfig:
+    if state is None:
+        state = _terminal_menu(
+            "选择构建图片压缩：",
+            [
+                ("on", "on", "开启（默认）· 优化发布副本，不修改原图"),
+                ("off", "off", "关闭 · 发布副本保持原始大小"),
+                ("back", "back", "不修改"),
+            ],
+        )
+    if state in {None, "back"}:
+        return config
+    enabled = state == "on"
+    saved = save_config(config, compress=enabled)
+    print(f"✅ 图片压缩已{'开启' if enabled else '关闭'}。")
+    return saved
+
+
 def cmd_brand_config(config: PaperConfig) -> int:
     while True:
         icon_label = "预设 P 图标" if config.icon.strip() == DEFAULT_ICON_SVG else "已自定义"
@@ -442,13 +461,17 @@ def cmd_brand_config(config: PaperConfig) -> int:
             config = _set_icon(config)
 
 
-def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> int:
+def cmd_config(
+    config_cmd: str | None = None,
+    home_cmd: str | None = None,
+    compress_cmd: str | None = None,
+) -> int:
     try:
         config = load_config(create=True)
     except ConfigError as exc:
         return _error(str(exc))
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd)
     if not sys.stdin.isatty():
         pages = "（未配置远程）"
         if config.git_remote:
@@ -457,7 +480,8 @@ def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> in
                 pages = info.pages_url
         print(
             f"文章目录：{config.posts_dir}\n编辑器：{config.editor}\n高亮颜色：{config.color}\n"
-            f"网站图标：{'已配置' if config.icon else '未配置'}\nGit 远程：{config.git_remote or '未配置'}\n"
+            f"网站图标：{'已配置' if config.icon else '未配置'}\n"
+            f"图片压缩：{'已开启' if config.compress else '已关闭'}\nGit 远程：{config.git_remote or '未配置'}\n"
             f"Pages 地址：{pages}"
         )
         return 0
@@ -468,6 +492,7 @@ def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> in
             "⚙️ Paper Config",
             [
                 ("home", "home", "高亮颜色 / Favicon 图标"),
+                ("compress", "compress", f"图片压缩 · {'已开启' if config.compress else '已关闭'}"),
                 ("editor", "editor", f"当前 {config.editor}"),
                 ("link", "link", str(config.posts_dir)),
                 ("remote", "remote", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
@@ -482,6 +507,8 @@ def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> in
         if action == "home":
             cmd_brand_config(config)
             config = load_config(create=True)
+        elif action == "compress":
+            config = _set_image_compression(config)
         elif action == "editor":
             config = _choose_editor(config)
         elif action == "link":
@@ -502,7 +529,12 @@ def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> in
             _pause()
 
 
-def _run_config_leaf(config: PaperConfig, config_cmd: str, home_cmd: str | None) -> int:
+def _run_config_leaf(
+    config: PaperConfig,
+    config_cmd: str,
+    home_cmd: str | None,
+    compress_cmd: str | None,
+) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
     if config_cmd == "home":
         if home_cmd == "color":
@@ -514,6 +546,9 @@ def _run_config_leaf(config: PaperConfig, config_cmd: str, home_cmd: str | None)
         return cmd_brand_config(config)
     if config_cmd == "editor":
         _choose_editor(config)
+        return 0
+    if config_cmd == "compress":
+        _set_image_compression(config, compress_cmd)
         return 0
     if config_cmd == "link":
         return cmd_link(None)
@@ -1042,6 +1077,20 @@ def cmd_build(preview: bool = False) -> int:
 class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
     preview_state: _PreviewState | None = None
 
+    def __init__(self, *args: object, base_path: str = "", **kwargs: object) -> None:
+        self.preview_base_path = base_path.rstrip("/")
+        super().__init__(*args, **kwargs)
+
+    def translate_path(self, path: str) -> str:
+        """Mount generated output at its GitHub Pages base path during preview."""
+
+        request_path, separator, query = path.partition("?")
+        base_path = self.preview_base_path
+        if base_path and (request_path == base_path or request_path.startswith(base_path + "/")):
+            request_path = request_path[len(base_path):] or "/"
+            path = request_path + (separator + query if separator else "")
+        return super().translate_path(path)
+
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
@@ -1094,7 +1143,8 @@ def cmd_serve(port: int) -> int:
     )
     watcher.start()
     preview_state.watcher_ready.wait()
-    handler = partial(_PreviewHandler, directory=str(output))
+    base_path = _base_path(preview_config)
+    handler = partial(_PreviewHandler, directory=str(output), base_path=base_path)
     try:
         try:
             server = _PreviewServer(("127.0.0.1", port), handler)
@@ -1103,7 +1153,8 @@ def cmd_serve(port: int) -> int:
             print(f"⚠️ 端口 {port} 已被占用，已改用随机端口。")
         with server:
             actual_port = server.server_address[1]
-            preview_url = f"http://127.0.0.1:{actual_port}"
+            preview_path = f"{base_path}/" if base_path else "/"
+            preview_url = f"http://127.0.0.1:{actual_port}{preview_path}"
             print(f"🌐 Paper 预览（包含草稿，仅本机可访问）：{preview_url}")
             opened = _open_browser(preview_url)
             print("已在默认浏览器中打开。" if opened else "未能自动打开浏览器，请复制上方地址。")
@@ -1472,6 +1523,8 @@ def make_parser() -> argparse.ArgumentParser:
     home_sub = home.add_subparsers(dest="home_cmd")
     home_sub.add_parser("color", help="Set the highlight color")
     home_sub.add_parser("icon", help="Set the brand icon")
+    compress = config_sub.add_parser("compress", help="Enable or disable output image compression")
+    compress.add_argument("compress_cmd", nargs="?", choices=["on", "off"])
     config_sub.add_parser("editor", help="Choose the default editor")
     config_sub.add_parser("link", help="Link a Markdown posts directory")
     config_sub.add_parser("remote", help="Configure the GitHub remote / Pages")
@@ -1550,7 +1603,11 @@ def _main(argv: list[str] | None = None) -> int:
     if command == "deploy": return cmd_deploy()
     if command == "status": return cmd_status()
     if command == "config":
-        return cmd_config(config_cmd=getattr(args, "config_cmd", None), home_cmd=getattr(args, "home_cmd", None))
+        return cmd_config(
+            config_cmd=getattr(args, "config_cmd", None),
+            home_cmd=getattr(args, "home_cmd", None),
+            compress_cmd=getattr(args, "compress_cmd", None),
+        )
     if command == "doctor": return cmd_doctor()
     if command == "update": return cmd_update()
     if command == "uninstall": return cmd_uninstall(args.clean)

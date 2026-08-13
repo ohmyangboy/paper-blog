@@ -258,6 +258,30 @@ class PaperCliTests(unittest.TestCase):
             handler.do_GET()
             handler.preview_state.request_refresh.assert_not_called()
 
+    def test_preview_maps_github_pages_base_path_to_generated_articles_and_assets(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "out"
+            article = output / "posts" / "你好-世界" / "index.html"
+            image = output / "assets" / "封面.png"
+            article.parent.mkdir(parents=True)
+            image.parent.mkdir(parents=True)
+            article.write_text("article", encoding="utf-8")
+            image.write_bytes(b"image")
+
+            handler = object.__new__(paper_cli._PreviewHandler)
+            handler.directory = str(output)
+            handler.preview_base_path = "/blog"
+
+            encoded_article = "/blog/posts/%E4%BD%A0%E5%A5%BD-%E4%B8%96%E7%95%8C/"
+            encoded_image = "/blog/assets/%E5%B0%81%E9%9D%A2.png"
+            self.assertEqual(Path(handler.translate_path(encoded_article)), article.parent)
+            self.assertEqual(Path(handler.translate_path(encoded_image)), image)
+            self.assertEqual(Path(handler.translate_path("/blog/")), output)
+            self.assertEqual(
+                Path(handler.translate_path("/blogger/posts/example/")),
+                output / "blogger" / "posts" / "example",
+            )
+
     def test_article_console_keeps_homepage_first_and_uses_status_lights(self):
         with tempfile.TemporaryDirectory() as root:
             posts = Path(root)
@@ -722,6 +746,27 @@ class GitHubRemoteConfigTests(unittest.TestCase):
         args = make_parser().parse_args(["config", "remote"])
         self.assertEqual(args.config_cmd, "remote")
         self.assertEqual(getattr(args, "home_cmd", None), None)
+
+        args = make_parser().parse_args(["config", "compress", "off"])
+        self.assertEqual(args.config_cmd, "compress")
+        self.assertEqual(args.compress_cmd, "off")
+
+    def test_config_compress_defaults_on_and_can_be_toggled_directly(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                config_file = root_path / ".paper" / "config.json"
+                self.assertTrue(json.loads(config_file.read_text(encoding="utf-8"))["compress"])
+
+                self.assertEqual(main(["config", "compress", "off"]), 0)
+                self.assertFalse(json.loads(config_file.read_text(encoding="utf-8"))["compress"])
+
+                self.assertEqual(main(["config", "compress", "on"]), 0)
+                self.assertTrue(json.loads(config_file.read_text(encoding="utf-8"))["compress"])
+            finally:
+                self._restore_paper_home(old_home)
 
     def test_config_subcommand_dispatches_to_leaf(self):
         cases = [
