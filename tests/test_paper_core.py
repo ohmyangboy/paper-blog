@@ -98,6 +98,20 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn("前文", rendered)
             self.assertIn("后文", rendered)
 
+    def test_markdown_shows_placeholder_for_missing_obsidian_assets_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            rendered = render_markdown("![[assets/missing.png]]", posts_dir=Path(root))
+            self.assertIn('class="missing-image"', rendered)
+            self.assertIn("图片未找到：assets/missing.png", rendered)
+
+    def test_markdown_finds_obsidian_image_that_only_exists_in_assets(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "assets").mkdir()
+            (posts / "assets" / "only.png").write_bytes(b"asset")
+            rendered = render_markdown("![[only.png]]", posts_dir=posts)
+            self.assertIn('src="/assets/only.png"', rendered)
+
     def test_markdown_rejects_ambiguous_obsidian_image_name(self):
         with tempfile.TemporaryDirectory() as root:
             posts = Path(root)

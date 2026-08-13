@@ -316,51 +316,13 @@ _IMAGE_SUFFIXES = {
 }
 
 
-def _import_local_image(
-    src: str, posts_dir: Path, *, require_unique_name: bool = False
-) -> str | None:
-    """Copy a local image referenced in Markdown into posts/assets and return its new relative src.
+def _copy_local_image(source: Path, posts_dir: Path) -> str | None:
+    """Copy one validated image source into Paper's managed assets directory."""
 
-    Returns None when the path is not a readable regular image file, so the original
-    reference is left untouched rather than failing the whole build.
-    """
-
-    clean = unquote(src.split("?")[0].split("#")[0])
-    if not clean:
-        return None
-    candidate = Path(clean)
-    base = posts_dir.resolve()
-    if require_unique_name and candidate.is_absolute():
-        return None
-    source = candidate if candidate.is_absolute() else base / candidate
-    if require_unique_name and candidate.parent == Path("."):
-        matches = [
-            path for path in base.rglob(candidate.name)
-            if "assets" not in path.relative_to(base).parts
-        ]
-        if len(matches) > 1 and require_unique_name:
-            locations = "、".join(str(path.relative_to(base)) for path in matches)
-            raise ValueError(f"Obsidian 图片名称不唯一：{candidate.name}（{locations}）")
-        if len(matches) == 1:
-            source = matches[0]
-    elif require_unique_name:
-        if ".." in candidate.parts:
-            return None
-        current = base
-        for part in candidate.parts:
-            current = current / part
-            if current.is_symlink():
-                return None
-        try:
-            source.resolve().relative_to(base)
-        except ValueError:
-            return None
     if source.is_symlink():
         return None
     source = source.resolve()
-    if not source.is_file():
-        return None
-    if source.suffix.lower() not in _IMAGE_SUFFIXES:
+    if not source.is_file() or source.suffix.lower() not in _IMAGE_SUFFIXES:
         return None
     assets_dir = posts_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -375,6 +337,59 @@ def _import_local_image(
         target = assets_dir / f"{source.stem}-{digest}{source.suffix}"
     shutil.copy2(source, target)
     return target.name
+
+
+def _import_local_image(src: str, posts_dir: Path) -> str | None:
+    """Copy a local image referenced in Markdown into posts/assets and return its new relative src.
+
+    Returns None when the path is not a readable regular image file, so the original
+    reference is left untouched rather than failing the whole build.
+    """
+
+    clean = unquote(src.split("?")[0].split("#")[0])
+    if not clean:
+        return None
+    candidate = Path(clean)
+    base = posts_dir.resolve()
+    source = candidate if candidate.is_absolute() else base / candidate
+    return _copy_local_image(source, posts_dir)
+
+
+def _import_obsidian_image(src: str, posts_dir: Path) -> str | None:
+    """Resolve an Obsidian attachment strictly within the linked posts directory."""
+
+    clean = unquote(src.split("?", 1)[0].split("#", 1)[0])
+    candidate = Path(clean)
+    base = posts_dir.resolve()
+    if not clean or candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    if candidate.parent == Path("."):
+        content_matches = [
+            path for path in base.rglob(candidate.name)
+            if "assets" not in path.relative_to(base).parts
+        ]
+        matches = content_matches
+        if not matches:
+            assets = base / "assets"
+            matches = list(assets.rglob(candidate.name)) if assets.is_dir() else []
+        if len(matches) > 1:
+            locations = "、".join(str(path.relative_to(base)) for path in matches)
+            raise ValueError(f"Obsidian 图片名称不唯一：{candidate.name}（{locations}）")
+        if not matches:
+            return None
+        source = matches[0]
+    else:
+        source = base / candidate
+    current = base
+    for part in candidate.parts if candidate.parent != Path(".") else source.relative_to(base).parts:
+        current = current / part
+        if current.is_symlink():
+            return None
+    try:
+        source.resolve().relative_to(base)
+    except ValueError:
+        return None
+    return _copy_local_image(source, posts_dir)
 
 
 def _obsidian_image_rule(state: Any, silent: bool) -> bool:
@@ -444,25 +459,26 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
                 if child.type == "image":
                     src = child.attrGet("src") or ""
                     local_src = src.removeprefix("./")
+                    is_obsidian = bool(child.meta.get("paper_obsidian_image"))
                     if src.startswith(("http://", "https://")):
                         child.attrSet("referrerpolicy", "no-referrer")
-                    elif local_src.startswith("assets/"):
-                        child.attrSet("src", normalized_asset_base + local_src.removeprefix("assets/"))
-                    elif import_dir is not None and not src.startswith(("//", "data:")):
-                        imported = _import_local_image(
-                            local_src,
-                            import_dir,
-                            require_unique_name=bool(child.meta.get("paper_obsidian_image")),
-                        )
+                    elif is_obsidian and import_dir is not None:
+                        imported = _import_obsidian_image(local_src, import_dir)
                         if imported:
                             child.attrSet("src", normalized_asset_base + imported)
-                        elif child.meta.get("paper_obsidian_image"):
+                        else:
                             child.type = "paper_missing_image"
                             child.tag = "span"
                             child.content = unquote(local_src.split("#", 1)[0])
                             child.attrs = {}
                             child.children = None
                             continue
+                    elif local_src.startswith("assets/"):
+                        child.attrSet("src", normalized_asset_base + local_src.removeprefix("assets/"))
+                    elif import_dir is not None and not src.startswith(("//", "data:")):
+                        imported = _import_local_image(local_src, import_dir)
+                        if imported:
+                            child.attrSet("src", normalized_asset_base + imported)
                     child.attrSet("loading", "lazy")
                     child.attrSet("decoding", "async")
                 elif child.type == "link_open":
