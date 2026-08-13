@@ -337,59 +337,87 @@ def _editor_installed(command: str, app_name: str) -> bool:
     return shutil.which(command) is not None or (sys.platform == "darwin" and (Path("/Applications") / f"{app_name}.app").exists())
 
 
+def _set_highlight_color(config: PaperConfig) -> PaperConfig:
+    value = _prompt(f"高亮颜色 HEX（当前 {config.color}）：")
+    if value is None:
+        return config
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        _error("颜色必须是 #D97757 这样的六位 HEX", 1)
+        _pause()
+        return config
+    return save_config(config, color=value.upper())
+
+
+def _set_icon(config: PaperConfig) -> PaperConfig:
+    icon_action = _terminal_menu(
+        "选择网站品牌图标来源：",
+        [
+            ("default", "default", "恢复 Paper 默认 favicon"),
+            ("file", "file", "复制到文章目录 assets/"),
+            ("paste", "paste", "直接保存图标代码"),
+            ("back", "back", "不修改"),
+        ],
+    )
+    if icon_action == "default":
+        return save_config(config, icon=DEFAULT_ICON_SVG)
+    if icon_action == "file":
+        source = _file_picker()
+        if source is None:
+            raw_path = _prompt("图标文件路径（留空取消）：")
+            source = Path(raw_path).expanduser().resolve() if raw_path else None
+        if source is not None:
+            return _install_favicon_file(config, source) or config
+    elif icon_action == "paste":
+        value = _prompt("粘贴一行 SVG、Data URI 或图片 URL：")
+        if value and ("<svg" in value.lower() or value.startswith(("data:image/", "http://", "https://", "assets/"))):
+            return save_config(config, icon=value)
+        if value:
+            _error("无法识别图标内容", 1)
+            _pause()
+    return config
+
+
+def _choose_editor(config: PaperConfig) -> PaperConfig:
+    candidates = [
+        ("default", "default", "macOS 默认 Markdown 应用"),
+        ("code", "code", "已安装" if _editor_installed("code", "Visual Studio Code") else "未检测到"),
+        ("cursor", "cursor", "已安装" if _editor_installed("cursor", "Cursor") else "未检测到"),
+        ("typora", "typora", "已安装" if _editor_installed("typora", "Typora") else "未检测到"),
+        ("obsidian", "obsidian", "已安装" if _editor_installed("obsidian", "Obsidian") else "未检测到"),
+        ("back", "back", "不修改"),
+    ]
+    editor = _terminal_menu("选择新建文章后自动打开的编辑器：", candidates)
+    if editor not in {None, "back"}:
+        return save_config(config, editor=editor)
+    return config
+
+
 def cmd_brand_config(config: PaperConfig) -> int:
     while True:
         icon_label = "预设 P 图标" if config.icon.strip() == DEFAULT_ICON_SVG else "已自定义"
         action = _terminal_menu(
-            "🏠 Paper 首页与品牌配置\n（使用 ↑/↓ 移动，enter 确认，esc 返回上一级）",
+            "🏠 Home · 首页与品牌\n（使用 ↑/↓ 移动，enter 确认，esc 返回上一级）",
             [
-                ("color", "🎨 网站高亮颜色", f"当前 [{config.color}]"),
-                ("icon", "🖼️ 网站品牌图标", f"{icon_label} / 文件 / 粘贴代码"),
-                ("back", "↩ 返回", "返回配置上级"),
+                ("color", "color", f"当前 [{config.color}]"),
+                ("icon", "icon", f"{icon_label} / 文件 / 粘贴代码"),
+                ("back", "back", "返回配置上级"),
             ],
         )
         if action in {None, "back"}:
             return 0
         if action == "color":
-            value = input(f"高亮颜色 HEX（当前 {config.color}）：").strip()
-            if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-                _error("颜色必须是 #D97757 这样的六位 HEX", 1)
-                _pause()
-                continue
-            config = save_config(config, color=value.upper())
+            config = _set_highlight_color(config)
         elif action == "icon":
-            icon_action = _terminal_menu(
-                "选择网站品牌图标来源：",
-                [
-                    ("default", "预设 P 图标", "恢复 Paper 默认 favicon"),
-                    ("file", "选择图片文件", "复制到文章目录 assets/"),
-                    ("paste", "粘贴 SVG / Data URI", "直接保存图标代码"),
-                    ("back", "返回", "不修改"),
-                ],
-            )
-            if icon_action == "default":
-                config = save_config(config, icon=DEFAULT_ICON_SVG)
-            elif icon_action == "file":
-                source = _file_picker()
-                if source is None:
-                    raw_path = input("图标文件路径（留空取消）：").strip()
-                    source = Path(raw_path).expanduser().resolve() if raw_path else None
-                if source is not None:
-                    config = _install_favicon_file(config, source) or config
-            elif icon_action == "paste":
-                value = input("粘贴一行 SVG、Data URI 或图片 URL：").strip()
-                if value and ("<svg" in value.lower() or value.startswith(("data:image/", "http://", "https://", "assets/"))):
-                    config = save_config(config, icon=value)
-                elif value:
-                    _error("无法识别图标内容", 1)
-                    _pause()
+            config = _set_icon(config)
 
 
-def cmd_config() -> int:
+def cmd_config(config_cmd: str | None = None, home_cmd: str | None = None) -> int:
     try:
         config = load_config(create=True)
     except ConfigError as exc:
         return _error(str(exc))
+    if config_cmd is not None:
+        return _run_config_leaf(config, config_cmd, home_cmd)
     if not sys.stdin.isatty():
         pages = "（未配置远程）"
         if config.git_remote:
@@ -408,42 +436,32 @@ def cmd_config() -> int:
         action = _terminal_menu(
             "⚙️ Paper Config",
             [
-                ("brand", "paper config home", "高亮颜色 / Favicon 图标"),
-                ("editor", "paper config editor", f"当前 {config.editor}"),
-                ("link", "paper link", str(config.posts_dir)),
-                ("remote", "paper config remote", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
-                ("pages-url", "paper config pages", "Pages 地址 / 自定义域名"),
-                ("test-conn", "paper config test", "检查 Git 与远程可达性"),
-                ("status", "paper status", f"路径 / 仓库 / 部署（{readiness_label}）"),
+                ("home", "home", "高亮颜色 / Favicon 图标"),
+                ("editor", "editor", f"当前 {config.editor}"),
+                ("link", "link", str(config.posts_dir)),
+                ("remote", "remote", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
+                ("pages", "pages", "Pages 地址 / 自定义域名"),
+                ("test", "test", "检查 Git 与远程可达性"),
+                ("status", "status", f"路径 / 仓库 / 部署（{readiness_label}）"),
                 ("back", "back", "返回主菜单"),
             ],
         )
         if action in {None, "back"}:
             return 0
-        if action == "brand":
+        if action == "home":
             cmd_brand_config(config)
             config = load_config(create=True)
         elif action == "editor":
-            candidates = [
-                ("default", "系统默认", "macOS 默认 Markdown 应用"),
-                ("code", "Visual Studio Code", "已安装" if _editor_installed("code", "Visual Studio Code") else "未检测到"),
-                ("cursor", "Cursor", "已安装" if _editor_installed("cursor", "Cursor") else "未检测到"),
-                ("typora", "Typora", "已安装" if _editor_installed("typora", "Typora") else "未检测到"),
-                ("obsidian", "Obsidian", "已安装" if _editor_installed("obsidian", "Obsidian") else "未检测到"),
-                ("back", "返回", "不修改"),
-            ]
-            editor = _terminal_menu("选择新建文章后自动打开的编辑器：", candidates)
-            if editor not in {None, "back"}:
-                config = save_config(config, editor=editor)
+            config = _choose_editor(config)
         elif action == "link":
             cmd_link(None)
             config = load_config(create=True)
         elif action == "remote":
             config = cmd_remote_entry(config)
-        elif action == "pages-url":
+        elif action == "pages":
             config = cmd_pages_url(config)
             _pause()
-        elif action == "test-conn":
+        elif action == "test":
             _clear_screen()
             cmd_test_connection(config)
             _pause()
@@ -451,6 +469,37 @@ def cmd_config() -> int:
             _clear_screen()
             cmd_status()
             _pause()
+
+
+def _run_config_leaf(config: PaperConfig, config_cmd: str, home_cmd: str | None) -> int:
+    """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
+    if config_cmd == "home":
+        if home_cmd == "color":
+            _set_highlight_color(config)
+            return 0
+        if home_cmd == "icon":
+            _set_icon(config)
+            return 0
+        return cmd_brand_config(config)
+    if config_cmd == "editor":
+        _choose_editor(config)
+        return 0
+    if config_cmd == "link":
+        return cmd_link(None)
+    if config_cmd == "remote":
+        cmd_remote_entry(config)
+        return 0
+    if config_cmd == "pages":
+        cmd_pages_url(config)
+        _pause()
+        return 0
+    if config_cmd == "test":
+        _clear_screen()
+        return cmd_test_connection(config)
+    if config_cmd == "status":
+        _clear_screen()
+        return cmd_status()
+    return _error(f"未知的 config 子命令：{config_cmd}", 1)
 
 
 def _deployment_readiness(config: PaperConfig) -> tuple[str, str]:
@@ -495,12 +544,31 @@ def _prompt(message: str) -> str | None:
         return None
 
 
-def _confirm_continue(message: str) -> bool:
-    """True when the user pressed Enter to proceed; False when they cancelled
-    (EOF/Interrupt) or typed anything to abort. Shared by the save-confirm and
-    wizard step prompts that follow the "Enter continues, text cancels" idiom."""
-    answer = _prompt(message)
-    return not (answer is None or answer)
+def _confirm_or_skip(message: str) -> bool:
+    """Single-key confirmation: Enter = continue (True), Space/Esc/Q = skip (False).
+
+    Shared by every confirm-or-skip prompt in the wizard and the save-confirm
+    step, so the convention is uniform. Reads a raw key on a TTY; falls back to
+    line input off-TTY (Enter / empty line continues, anything else skips) so
+    pipes and tests stay deterministic.
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        try:
+            return not input(message).strip()
+        except (EOFError, KeyboardInterrupt):
+            return False
+    sys.stdout.write(message)
+    sys.stdout.flush()
+    while True:
+        key = _read_terminal_key()
+        if key in {"\r", "\n"}:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return True
+        if key in {" ", "q", "Q", "\x1b", "\x03"}:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return False
 
 
 def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperConfig | None:
@@ -518,8 +586,8 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     print(f"  预期 Pages URL：{info.pages_url}")
     if origin and origin != info.ssh_url:
         print(f"  ⚠️ 托管仓库当前 origin：{origin}（与将要保存的不一致）")
-    if not _confirm_continue("\n按 Enter 确认保存（输入任意内容取消）："):
-        print("已取消。")
+    if not _confirm_or_skip("\n按 Enter 确认保存 · 按 Space 跳过："):
+        print("已跳过，未修改任何配置。")
         return None
     if origin and origin != info.ssh_url:
         answer = _prompt("origin 不一致，输入 YES 替换托管仓库 origin（其他内容取消）：")
@@ -571,9 +639,7 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         print(f"  {'已为你打开' if opened else '未能自动打开'} https://github.com/new —— 没有反应就复制这条网址手动打开。")
         print("  · 仓库名决定博客地址：你的用户名.github.io → 根路径；其它名字 → /仓库名 子路径")
         print("  · 已有仓库可跳过本步，直接到下一步粘贴地址")
-        if not _confirm_continue("创建好仓库并复制地址后，按 Enter 继续（输入任意内容取消）："):
-            print("已取消。")
-            return config
+        _confirm_or_skip("  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）：")
     print("第 2 步 / 共 4 步：粘贴仓库地址")
     while True:
         raw = _prompt("  仓库地址（SSH / HTTPS / owner/repo 简写；留空取消）：")
@@ -592,31 +658,28 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     config = result
     print("\n第 4 步 / 共 4 步：发布并开启 GitHub Pages")
     print("  gh-pages 分支要等你发布之后才存在。现在可以直接发布，不用退出配置。")
-    choice = _prompt("\n  现在发布并推送 gh-pages 吗？按 Enter 发布（会先勾选草稿）· 输入 skip 稍后自己发布：")
-    if choice is None or choice.lower() == "skip":
-        print("  已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
-    else:
+    if _confirm_or_skip("\n  现在发布并推送 gh-pages 吗？按 Enter 发布 · 按 Space 跳过："):
         cmd_publish(all_posts=False, slugs=[])
         if _gh_pages_pushed(config):
             print("  ✅ 已推送 gh-pages —— 设置页里现在可以选到它了。")
         else:
             print("  ⚠️ 尚未推送 gh-pages（刚才可能没有勾选草稿）。")
-            retry = _prompt("  要把当前站点（首页 + 已发布内容）先推上去吗？按 Enter 推送 · 输入 skip 稍后自己处理：")
-            if not (retry is None or retry.lower() == "skip"):
+            if _confirm_or_skip("  要把当前站点（首页 + 已发布内容）先推上去吗？按 Enter 推送 · 按 Space 跳过："):
                 try:
                     build_site(config)
                     pushed = cmd_deploy() == 0
                 except Exception:
                     pushed = False
                 print("  ✅ 已推送 gh-pages。" if pushed else "  ⚠️ 推送未成功，稍后执行 paper publish 重试。")
-    print(f"\n  设置页：{info.pages_settings_url}")
-    open_choice = _prompt("  现在打开设置页选 gh-pages 吗？按 Enter 打开 · 输入 skip 稍后自己打开：")
-    if open_choice is None or open_choice.lower() == "skip":
-        print("  已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
     else:
+        print("  已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
+    print(f"\n  设置页：{info.pages_settings_url}")
+    if _confirm_or_skip("  现在打开设置页选 gh-pages 吗？按 Enter 打开 · 按 Space 跳过："):
         opened = _open_browser(info.pages_settings_url)
         print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
         print("  ⚠️ 若下拉框里没有 gh-pages，说明还没推送成功 —— 稍后执行 paper publish 再回来刷新。")
+    else:
+        print("  已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
     _pause()
     return config
 
@@ -1188,7 +1251,18 @@ def make_parser() -> argparse.ArgumentParser:
     publish.add_argument("--all", action="store_true")
     commands.add_parser("deploy", help="Retry the GitHub Pages deploy")
     commands.add_parser("status", help="Show site status")
-    commands.add_parser("config", help="Open the arrow-key config console")
+    config = commands.add_parser("config", help="Open the arrow-key config console")
+    config_sub = config.add_subparsers(dest="config_cmd")
+    home = config_sub.add_parser("home", help="Brand: highlight color and favicon")
+    home_sub = home.add_subparsers(dest="home_cmd")
+    home_sub.add_parser("color", help="Set the highlight color")
+    home_sub.add_parser("icon", help="Set the brand icon")
+    config_sub.add_parser("editor", help="Choose the default editor")
+    config_sub.add_parser("link", help="Link a Markdown posts directory")
+    config_sub.add_parser("remote", help="Configure the GitHub remote / Pages")
+    config_sub.add_parser("pages", help="Set the site URL or custom domain")
+    config_sub.add_parser("test", help="Test Git and remote reachability")
+    config_sub.add_parser("status", help="Show full config and deployment status")
     commands.add_parser("doctor", help="Check the install and runtime environment")
     uninstall = commands.add_parser("uninstall", help="Show uninstall instructions, optionally clean Paper data")
     uninstall.add_argument("--clean", action="store_true")
@@ -1203,12 +1277,12 @@ def run_dashboard() -> int:
             action = _terminal_menu(
                 "请使用方向键导航，Enter 或数字键选择对应的功能：",
                 [
-                    ("list", "paper list", "管理文章"),
-                    ("new", "paper new", "新建文章并打开编辑器"),
-                    ("config", "paper config", "设置路径、编辑器与品牌"),
-                    ("publish", "paper publish", "选择草稿并发布"),
-                    ("serve", "paper serve", "启动本地热更新预览"),
-                    ("uninstall", "paper uninstall", "卸载与清理配置，保留原稿"),
+                    ("list", "list", "管理文章"),
+                    ("new", "new", "新建文章并打开编辑器"),
+                    ("config", "config", "设置路径、编辑器与品牌"),
+                    ("publish", "publish", "选择草稿并发布"),
+                    ("serve", "serve", "启动本地热更新预览"),
+                    ("uninstall", "uninstall", "卸载与清理配置，保留原稿"),
                     ("quit", "quit", "退出 Paper"),
                 ],
                 footer_message="再按一次 Esc 或 Q 退出 Paper" if exit_armed else "",
@@ -1259,7 +1333,8 @@ def _main(argv: list[str] | None = None) -> int:
     if command == "publish": return cmd_publish(args.all, args.slugs)
     if command == "deploy": return cmd_deploy()
     if command == "status": return cmd_status()
-    if command == "config": return cmd_config()
+    if command == "config":
+        return cmd_config(config_cmd=getattr(args, "config_cmd", None), home_cmd=getattr(args, "home_cmd", None))
     if command == "doctor": return cmd_doctor()
     if command == "uninstall": return cmd_uninstall(args.clean)
     make_parser().print_help()

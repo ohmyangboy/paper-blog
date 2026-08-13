@@ -27,6 +27,7 @@ from paper_cli import (
     cmd_config,
     cmd_test_connection,
     main,
+    make_parser,
     run_dashboard,
 )
 from paper_runtime.core import PaperConfig, build_site
@@ -283,8 +284,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", "", ""]
+                    "builtins.input", side_effect=["octocat/Hello-World", ""]
                 ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
+                ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
                 ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
@@ -309,8 +312,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "", "", ""]
+                    "builtins.input", side_effect=["octocat/Hello-World", ""]
                 ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser, mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
+                ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
                 ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
@@ -351,8 +356,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
                     "builtins.input",
-                    side_effect=["", "not-an-address", "", "octocat/Hello-World", "", "", "", ""],
+                    side_effect=["not-an-address", "", "octocat/Hello-World", ""],
                 ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
+                ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
                 ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
@@ -370,8 +377,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["", "octocat/Hello-World", "", "skip", "skip", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
+                    "builtins.input", side_effect=["octocat/Hello-World", ""]
+                ), mock.patch("paper_cli._confirm_or_skip", side_effect=[True, True, False, False]), mock.patch(
+                    "paper_cli.webbrowser.open", return_value=True
+                ) as browser:
                     self.assertEqual(cmd_config(), 0)
                 self.assertEqual(browser.call_args_list, [mock.call("https://github.com/new")])
                 saved = json.loads((root_path / ".paper" / "config.json").read_text(encoding="utf-8"))
@@ -398,7 +407,9 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 _init_with_origin(site, "git@github.com:octocat/Hello-World.git")
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["octocat/New-Repo", "", "YES", "", "", ""]), mock.patch(
+                ), mock.patch("builtins.input", side_effect=["octocat/New-Repo", "YES", ""]), mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True, True, True]
+                ), mock.patch(
                     "paper_cli.webbrowser.open", return_value=True
                 ) as browser, mock.patch("paper_cli.cmd_publish", return_value=0), mock.patch(
                     "paper_cli._gh_pages_pushed", return_value=True
@@ -468,8 +479,10 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
-                    "builtins.input", side_effect=["octocat/Hello-World", "", "YES", "", "", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "builtins.input", side_effect=["octocat/Hello-World", "YES", ""]
+                ), mock.patch("paper_cli._confirm_or_skip", side_effect=[True, True, True]), mock.patch(
+                    "paper_cli.webbrowser.open", return_value=True
+                ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
                 ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
                     self.assertEqual(cmd_config(), 0)
@@ -501,7 +514,9 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 _init_with_origin(site, "git@github.com:old/old.git")
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
-                ), mock.patch("builtins.input", side_effect=["octocat/Hello-World", "", "no"]):
+                ), mock.patch("builtins.input", side_effect=["octocat/Hello-World", "no"]), mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True]
+                ):
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads(config_file.read_text(encoding="utf-8"))
                 self.assertEqual(saved["gitRemote"], "git@github.com:old/old.git")
@@ -511,6 +526,43 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                 self.assertEqual(origin, "git@github.com:old/old.git")
             finally:
                 self._restore_paper_home(old_home)
+
+    def test_config_subcommand_parser_routes_nested(self):
+        args = make_parser().parse_args(["config", "home", "color"])
+        self.assertEqual(args.command, "config")
+        self.assertEqual(args.config_cmd, "home")
+        self.assertEqual(args.home_cmd, "color")
+
+        args = make_parser().parse_args(["config", "home"])
+        self.assertEqual(args.config_cmd, "home")
+        self.assertEqual(getattr(args, "home_cmd", None), None)
+
+        args = make_parser().parse_args(["config", "remote"])
+        self.assertEqual(args.config_cmd, "remote")
+        self.assertEqual(getattr(args, "home_cmd", None), None)
+
+    def test_config_subcommand_dispatches_to_leaf(self):
+        cases = [
+            (["home", "color"], "paper_cli._set_highlight_color"),
+            (["home", "icon"], "paper_cli._set_icon"),
+            (["home"], "paper_cli.cmd_brand_config"),
+            (["editor"], "paper_cli._choose_editor"),
+            (["remote"], "paper_cli.cmd_remote_entry"),
+            (["status"], "paper_cli.cmd_status"),
+            (["test"], "paper_cli.cmd_test_connection"),
+        ]
+        for subargs, target in cases:
+            with self.subTest(subargs=subargs):
+                with tempfile.TemporaryDirectory() as root:
+                    root_path = Path(root)
+                    old_home = self._set_paper_home(root_path)
+                    try:
+                        self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                        with mock.patch(target) as leaf:
+                            main(["config", *subargs])
+                        leaf.assert_called_once()
+                    finally:
+                        self._restore_paper_home(old_home)
 
     def test_deployment_readiness_states(self):
         if shutil.which("git") is None:
