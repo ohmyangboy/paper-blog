@@ -730,6 +730,7 @@ footer { margin-top: 4rem; text-align: center; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }
 @media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } }
+@media (min-width: 48rem) { .home-container { margin-top: 4rem; } }
 """
     pygments_css = _formatter.get_style_defs(".syntax-highlight") if _formatter else ""
     pygments_css += "\n.syntax-highlight { background: transparent !important; }"
@@ -765,12 +766,13 @@ def _live_reload_script() -> str:
     return """<script>(()=>{let v=null;setInterval(async()=>{try{const r=await fetch('/.paper-revision',{cache:'no-store'});const n=await r.text();if(v===null){v=n}else if(n!==v){location.reload()}}catch(_e){}},600)})();</script>"""
 
 
-def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False) -> str:
+def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False) -> str:
     marker = '<p><strong>草稿预览</strong></p>' if draft else ""
     script = _live_reload_script() if live_reload else ""
     favicon = html.escape(_favicon_href(config), quote=True)
     page_title = config.site_name if title == config.site_name else f"{title} | {config.site_name}"
-    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\"><title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"container\">{marker}{body}</div><footer><a href=\"{html.escape(_github_url(config), quote=True)}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{script}</body></html>"""
+    container_class = "container home-container" if home else "container"
+    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\"><title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{html.escape(_github_url(config), quote=True)}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{script}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -830,7 +832,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
         listing.append("</div></main>")
         asset_base = _href(config, "/assets/")
         index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
-        _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload))
+        _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
         _write(temp_parent / "404.html", _layout(config, "Not found", "<main><h1>Not found</h1></main>", live_reload=live_reload))
         for post in posts:
             if not post.published and not include_drafts:

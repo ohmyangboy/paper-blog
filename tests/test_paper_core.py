@@ -297,6 +297,8 @@ class PaperCoreTests(unittest.TestCase):
             self.assertTrue((output / "index.html").exists())
             self.assertIn("Public", (output / "index.html").read_text(encoding="utf-8"))
             self.assertTrue((output / "posts" / "public" / "index.html").exists())
+            article_html = (output / "posts" / "public" / "index.html").read_text(encoding="utf-8")
+            self.assertIn('<body><div class="container">', article_html)
             self.assertFalse((output / "posts" / "private" / "index.html").exists())
             self.assertTrue((output / "assets" / "used.png").exists())
             self.assertFalse((output / "assets" / "a.txt").exists())
@@ -363,6 +365,8 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn("letter-spacing: 0.02em", home)
             self.assertIn("line-height: 1.5", home)
             self.assertIn("cursor: pointer", home)
+            self.assertIn('class="container home-container"', home)
+            self.assertIn("@media (min-width: 48rem) { .home-container { margin-top: 4rem; } }", home)
             self.assertIn("margin-inline: auto", home)
             self.assertIn("border: 1px solid var(--border)", home)
 
