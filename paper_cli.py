@@ -406,16 +406,16 @@ def cmd_config() -> int:
         _state, readiness_label = _deployment_readiness(config)
         remote_info = normalize_git_remote(config.git_remote)
         action = _terminal_menu(
-            "⚙️ Paper 配置控制台",
+            "⚙️ Paper Config",
             [
-                ("brand", "首页与品牌", "高亮颜色 / Favicon 图标"),
-                ("editor", "默认编辑器", f"当前 {config.editor}"),
-                ("link", "关联文章目录", str(config.posts_dir)),
-                ("remote", "GitHub 远程", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
-                ("pages-url", "站点地址", "Pages 地址 / 自定义域名"),
-                ("test-conn", "测试连接", "检查 Git 与远程可达性"),
-                ("status", "查看完整配置", f"路径 / 仓库 / 部署（{readiness_label}）"),
-                ("back", "返回", "返回主菜单"),
+                ("brand", "paper config home", "高亮颜色 / Favicon 图标"),
+                ("editor", "paper config editor", f"当前 {config.editor}"),
+                ("link", "paper link", str(config.posts_dir)),
+                ("remote", "paper config remote", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
+                ("pages-url", "paper config pages", "Pages 地址 / 自定义域名"),
+                ("test-conn", "paper config test", "检查 Git 与远程可达性"),
+                ("status", "paper status", f"路径 / 仓库 / 部署（{readiness_label}）"),
+                ("back", "back", "返回主菜单"),
             ],
         )
         if action in {None, "back"}:
@@ -1171,26 +1171,26 @@ def cmd_uninstall(clean: bool) -> int:
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="paper", description="极简 Python SSG 与写作 CLI")
+    parser = argparse.ArgumentParser(prog="paper", description="Minimal Python static-site generator and writing CLI")
     parser.add_argument("--version", action="version", version=f"paper {VERSION}")
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("init", help="创建标准文章目录并关联")
-    link = commands.add_parser("link", help="关联已有 Markdown 文章目录")
+    commands.add_parser("init", help="Create a standard posts directory and link it")
+    link = commands.add_parser("link", help="Link an existing Markdown posts directory")
     link.add_argument("path", nargs="?")
-    new = commands.add_parser("new", help="创建草稿")
+    new = commands.add_parser("new", help="Create a draft")
     new.add_argument("title", nargs="?")
-    commands.add_parser("list", aliases=["posts"], help="列出文章")
-    commands.add_parser("build", help="生成生产静态站点")
-    serve = commands.add_parser("serve", help="启动本地草稿预览")
+    commands.add_parser("list", aliases=["posts"], help="List posts")
+    commands.add_parser("build", help="Generate the production static site")
+    serve = commands.add_parser("serve", help="Start a local draft preview")
     serve.add_argument("--port", type=int, default=8000)
-    publish = commands.add_parser("publish", help="发布草稿并同步 GitHub Pages")
+    publish = commands.add_parser("publish", help="Publish drafts and sync GitHub Pages")
     publish.add_argument("slugs", nargs="*")
     publish.add_argument("--all", action="store_true")
-    commands.add_parser("deploy", help="重试 GitHub Pages 部署")
-    commands.add_parser("status", help="显示站点状态")
-    commands.add_parser("config", help="打开方向键配置控制台")
-    commands.add_parser("doctor", help="检查安装和运行环境")
-    uninstall = commands.add_parser("uninstall", help="显示卸载指引，可选清理 Paper 数据")
+    commands.add_parser("deploy", help="Retry the GitHub Pages deploy")
+    commands.add_parser("status", help="Show site status")
+    commands.add_parser("config", help="Open the arrow-key config console")
+    commands.add_parser("doctor", help="Check the install and runtime environment")
+    uninstall = commands.add_parser("uninstall", help="Show uninstall instructions, optionally clean Paper data")
     uninstall.add_argument("--clean", action="store_true")
     return parser
 
@@ -1203,12 +1203,12 @@ def run_dashboard() -> int:
             action = _terminal_menu(
                 "请使用方向键导航，Enter 或数字键选择对应的功能：",
                 [
-                    ("list", "list", "管理文章"),
-                    ("new", "new", "新建文章并打开编辑器"),
-                    ("config", "config", "设置路径、编辑器与品牌"),
-                    ("publish", "publish", "选择草稿并发布"),
-                    ("serve", "serve", "启动本地热更新预览"),
-                    ("uninstall", "uninstall", "卸载与清理配置，保留原稿"),
+                    ("list", "paper list", "管理文章"),
+                    ("new", "paper new", "新建文章并打开编辑器"),
+                    ("config", "paper config", "设置路径、编辑器与品牌"),
+                    ("publish", "paper publish", "选择草稿并发布"),
+                    ("serve", "paper serve", "启动本地热更新预览"),
+                    ("uninstall", "paper uninstall", "卸载与清理配置，保留原稿"),
                     ("quit", "quit", "退出 Paper"),
                 ],
                 footer_message="再按一次 Esc 或 Q 退出 Paper" if exit_armed else "",
