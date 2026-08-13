@@ -279,7 +279,7 @@ def render_markdown(source: str, *, asset_base: str = "/assets/") -> str:
 
     if MarkdownIt is None:
         raise RuntimeError("Paper 的 Markdown 运行依赖未安装；请重新安装 Paper，不要手动运行 pip。")
-    parser = MarkdownIt("js-default", {"highlight": _highlight})
+    parser = MarkdownIt("js-default", {"highlight": _highlight, "breaks": True})
     parser.enable(["table", "strikethrough"])
 
     normalized_asset_base = "/" + asset_base.strip("/") + "/"

@@ -33,6 +33,18 @@ class PaperCoreTests(unittest.TestCase):
         self.assertNotIn("<script>", rendered)
         self.assertIn("&lt;script&gt;", rendered)
 
+    def test_markdown_single_newline_renders_as_line_break(self):
+        rendered = render_markdown("第一行\n第二行\n第三行")
+        self.assertIn("<br>", rendered)
+        self.assertEqual(rendered.count("<br>"), 2)
+        self.assertIn("第一行<br>", rendered)
+
+    def test_markdown_blank_line_still_starts_a_paragraph(self):
+        rendered = render_markdown("第一段\n\n第二段")
+        self.assertNotIn("<br>", rendered)
+        self.assertIn("<p>第一段</p>", rendered)
+        self.assertIn("<p>第二段</p>", rendered)
+
     def test_markdown_images_avoid_hotlink_referrer_and_rewrite_local_assets(self):
         remote = render_markdown("![avatar](https://cdn.example.test/avatar.png)")
         local = render_markdown("![cover](assets/cover.png)", asset_base="/blog/assets/")
