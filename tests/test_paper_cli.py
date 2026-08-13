@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ from paper_cli import (
     _read_terminal_key,
     _terminal_menu,
     _watch_preview,
+    _with_spinner,
     cmd_config,
     cmd_test_connection,
     main,
@@ -527,6 +529,34 @@ class GitHubRemoteConfigTests(unittest.TestCase):
             finally:
                 self._restore_paper_home(old_home)
 
+    def test_wizard_prints_step_tracker_and_guidance(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                buffer = io.StringIO()
+                with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                    "paper_cli._terminal_menu", side_effect=["remote", None]
+                ), mock.patch(
+                    "builtins.input", side_effect=["octocat/Hello-World", ""]
+                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                    "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
+                ), mock.patch("paper_cli.cmd_publish", return_value=0), mock.patch(
+                    "paper_cli._gh_pages_pushed", return_value=True
+                ), contextlib.redirect_stdout(buffer):
+                    self.assertEqual(cmd_config(), 0)
+                output = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
+                self.assertIn("🧭 GitHub Pages 发布向导（4 步）", output)
+                self.assertIn("▶ 1.创建仓库", output)  # active step highlight
+                self.assertIn("✓ 1.创建仓库", output)  # completed step check
+                self.assertIn("▶ 4.发布开启", output)
+                self.assertIn("已为你打开 GitHub 新建仓库页", output)
+                self.assertIn("git@github.com:用户名/仓库.git", output)
+                self.assertIn("✓ 已识别：octocat/Hello-World", output)
+            finally:
+                self._restore_paper_home(old_home)
+
     def test_config_subcommand_parser_routes_nested(self):
         args = make_parser().parse_args(["config", "home", "color"])
         self.assertEqual(args.command, "config")
@@ -611,6 +641,34 @@ class GitHubRemoteConfigTests(unittest.TestCase):
             side_effect=subprocess.TimeoutExpired(cmd="git ls-remote", timeout=10),
         ):
             self.assertNotEqual(cmd_test_connection(cfg), 0)
+
+    def test_with_spinner_runs_callable_off_tty(self):
+        calls = []
+
+        def probe():
+            calls.append(1)
+            return "done"
+
+        self.assertEqual(_with_spinner("working", probe), "done")
+        self.assertEqual(calls, [1])  # ran synchronously, once
+
+    def test_with_spinner_propagates_exception_off_tty(self):
+        def boom():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            _with_spinner("working", boom)
+
+    def test_with_spinner_propagates_exception_on_tty(self):
+        with mock.patch("paper_cli.sys.stdout.isatty", return_value=True), mock.patch(
+            "paper_cli.sys.stderr.isatty", return_value=True
+        ), mock.patch("paper_cli.time.sleep"):
+
+            def boom():
+                raise RuntimeError("boom")
+
+            with self.assertRaises(RuntimeError):
+                _with_spinner("working", boom)
 
     def _restore_paper_home(self, old_home):
         if old_home is None:

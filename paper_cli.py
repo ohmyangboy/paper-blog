@@ -19,6 +19,7 @@ import threading
 import time
 import tty
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -44,6 +45,7 @@ from paper_runtime.core import (
 VERSION = "0.1.0"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
+GREEN = "\033[32m"
 BOLD = "\033[1m"
 GRAY = "\033[90m"
 RESET = "\033[0m"
@@ -571,6 +573,26 @@ def _confirm_or_skip(message: str) -> bool:
             return False
 
 
+_WIZARD_STEPS = ("创建仓库", "粘贴地址", "核对保存", "发布开启")
+
+
+def _wizard_stepper(current: int) -> None:
+    """Print a compact 4-step tracker with the active step highlighted.
+
+    Rendered as one line, e.g. ``✓ 1.创建仓库  ▶ 2.粘贴地址  3.核对保存  4.发布开启``,
+    so the user always sees where they are in the wizard and what comes next.
+    """
+    cells = []
+    for index, name in enumerate(_WIZARD_STEPS, start=1):
+        if index < current:
+            cells.append(f"{GREEN}✓ {index}.{name}{RESET}")
+        elif index == current:
+            cells.append(f"{TERRACOTTA}{BOLD}▶ {index}.{name}{RESET}")
+        else:
+            cells.append(f"{GRAY}  {index}.{name}{RESET}")
+    print(f"  {'  '.join(cells)}")
+
+
 def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperConfig | None:
     """Preview, confirm, handle a mismatched origin, save, and bind the managed origin.
 
@@ -579,7 +601,7 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     and the direct address-input flow.
     """
     origin = _managed_origin(config)
-    print("\n请确认以下信息：")
+    print("\n请核对以下信息（保存后发布将推送到该仓库）：")
     print(f"  仓库所有者：{info.owner}")
     print(f"  仓库名称：{info.repo}")
     print(f"  Remote URL：{info.ssh_url}")
@@ -587,15 +609,16 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     if origin and origin != info.ssh_url:
         print(f"  ⚠️ 托管仓库当前 origin：{origin}（与将要保存的不一致）")
     if not _confirm_or_skip("\n按 Enter 确认保存 · 按 Space 跳过："):
-        print("已跳过，未修改任何配置。")
+        print("  ⏭ 已跳过，未修改任何配置。")
         return None
     if origin and origin != info.ssh_url:
         answer = _prompt("origin 不一致，输入 YES 替换托管仓库 origin（其他内容取消）：")
         if answer != "YES":
-            print("已取消，未修改任何配置。")
+            print("  ⏭ 已取消，未修改任何配置。")
             return None
     saved = save_config(config, git_remote=info.ssh_url)
-    _, message = _bind_managed_origin(saved, info.ssh_url)
+    result = _with_spinner("正在绑定托管仓库 origin ……", _bind_managed_origin, saved, info.ssh_url)
+    _, message = result if isinstance(result, tuple) else (False, "绑定托管仓库 origin 失败。")
     if message:
         print(f"⚠️ {message}")
     print(f"✅ 已保存 GitHub 远程：{info.ssh_url}")
@@ -620,6 +643,10 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     Runs for first-time setup and re-binding alike. When a remote is already
     bound it is shown up front and the create-repo step is skipped; pasting a
     new address re-binds through the same confirm/save path.
+
+    Each step prints a compact tracker (``_wizard_stepper``) so the user always
+    sees where they are and what comes next, and slow operations (binding the
+    origin, building the site, pushing gh-pages) show a loading spinner.
     """
 
     if shutil.which("git") is None:
@@ -631,33 +658,45 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     if existing:
         print(f"  当前已绑定：{existing.owner}/{existing.repo} · {existing.pages_url}")
         print("  要更换绑定，直接在第 2 步粘贴新地址；要保留当前绑定，留空退出。\n")
-    print("第 1 步 / 共 4 步：创建仓库")
+    else:
+        print("  目标：把博客发布到 GitHub Pages。按下面的步骤操作，随时可跳过。\n")
+
+    _wizard_stepper(1)
     if existing:
-        print("  已绑定仓库，无需新建 —— 直接到第 2 步粘贴要绑定的地址。")
+        print("  ✅ 已绑定仓库，无需新建 —— 直接进入第 2 步粘贴要绑定的地址。")
     else:
         opened = _open_browser("https://github.com/new")
-        print(f"  {'已为你打开' if opened else '未能自动打开'} https://github.com/new —— 没有反应就复制这条网址手动打开。")
+        print(f"  {'已为你打开' if opened else '未能自动打开'} GitHub 新建仓库页 https://github.com/new")
         print("  · 仓库名决定博客地址：你的用户名.github.io → 根路径；其它名字 → /仓库名 子路径")
-        print("  · 已有仓库可跳过本步，直接到下一步粘贴地址")
-        _confirm_or_skip("  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）：")
-    print("第 2 步 / 共 4 步：粘贴仓库地址")
+        print("  · 可见性选 Public；已有仓库可跳过本步，直接粘贴地址。")
+        if _confirm_or_skip("\n  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）："):
+            print("  ✓ 继续")
+        else:
+            print("  ⏭ 跳过 —— 使用已有仓库，直接进入第 2 步。")
+
+    _wizard_stepper(2)
+    print("\n  支持三种写法（任选其一）：")
+    print(f"    {GRAY}git@github.com:用户名/仓库.git  ·  https://github.com/用户名/仓库  ·  用户名/仓库{RESET}")
     while True:
-        raw = _prompt("  仓库地址（SSH / HTTPS / owner/repo 简写；留空取消）：")
+        raw = _prompt("  仓库地址（留空取消）：")
         if raw is None or not raw:
             return config
         info = normalize_git_remote(raw)
         if info is None:
-            _error("无法识别的 GitHub 仓库地址，请粘贴完整地址或 owner/repo 简写", 1)
+            _error("无法识别的 GitHub 仓库地址，请参考上面的三种写法重新输入", 1)
             _pause()
             continue
         break
-    print("第 3 步 / 共 4 步：核对并保存")
+    print(f"  ✓ 已识别：{info.owner}/{info.repo}")
+
+    _wizard_stepper(3)
     result = _confirm_and_save_remote(config, info)
     if result is None:
         return config
     config = result
-    print("\n第 4 步 / 共 4 步：发布并开启 GitHub Pages")
-    print("  gh-pages 分支要等你发布之后才存在。现在可以直接发布，不用退出配置。")
+
+    _wizard_stepper(4)
+    print("\n  gh-pages 分支要等你发布之后才存在，所以顺序是：先发布，再开启 Pages。")
     if _confirm_or_skip("\n  现在发布并推送 gh-pages 吗？按 Enter 发布 · 按 Space 跳过："):
         cmd_publish(all_posts=False, slugs=[])
         if _gh_pages_pushed(config):
@@ -666,20 +705,21 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
             print("  ⚠️ 尚未推送 gh-pages（刚才可能没有勾选草稿）。")
             if _confirm_or_skip("  要把当前站点（首页 + 已发布内容）先推上去吗？按 Enter 推送 · 按 Space 跳过："):
                 try:
-                    build_site(config)
+                    _with_spinner("正在构建站点 ……", build_site, config)
                     pushed = cmd_deploy() == 0
                 except Exception:
                     pushed = False
                 print("  ✅ 已推送 gh-pages。" if pushed else "  ⚠️ 推送未成功，稍后执行 paper publish 重试。")
     else:
-        print("  已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
+        print("  ⏭ 已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
     print(f"\n  设置页：{info.pages_settings_url}")
     if _confirm_or_skip("  现在打开设置页选 gh-pages 吗？按 Enter 打开 · 按 Space 跳过："):
         opened = _open_browser(info.pages_settings_url)
         print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
         print("  ⚠️ 若下拉框里没有 gh-pages，说明还没推送成功 —— 稍后执行 paper publish 再回来刷新。")
     else:
-        print("  已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
+        print("  ⏭ 已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
+    print("\n  ✅ 配置完成。之后用 paper publish 发布，用 paper serve 本地预览。")
     _pause()
     return config
 
@@ -704,14 +744,12 @@ def cmd_test_connection(config: PaperConfig) -> int:
     if info is None:
         return _error("尚未配置有效的 GitHub 远程，请先在「GitHub 远程」设置。")
     print(f"测试远程：{info.ssh_url}")
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", info.ssh_url, "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
+    result = _run_with_spinner(
+        "正在连接远程仓库 ……",
+        ["git", "ls-remote", info.ssh_url, "HEAD"],
+        timeout=10,
+    )
+    if result is None:
         return _error("连接超时（>10 秒）。请检查网络与 SSH 认证。")
     if result.returncode != 0:
         if result.stderr.strip():
@@ -1004,6 +1042,44 @@ def _git(config: PaperConfig, *args: str, capture: bool = False, timeout: float 
     )
 
 
+def _with_spinner(message: str, fn: Callable[..., object], *args: object) -> object:
+    """Run a blocking callable, animating a loading spinner on a TTY while it works.
+
+    Returns fn's return value. On non-TTY output the spinner is skipped and the
+    callable runs synchronously (tests and pipes stay deterministic). Exceptions
+    raised by fn are re-raised on the calling thread in both modes.
+    """
+    if not (sys.stdout.isatty() and sys.stderr.isatty()):
+        return fn(*args)
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    stop = threading.Event()
+    result: dict[str, object] = {}
+
+    def _run() -> None:
+        try:
+            result["value"] = fn(*args)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            result["error"] = exc
+        finally:
+            stop.set()
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    index = 0
+    label = f"  {message} "
+    while not stop.is_set():
+        sys.stdout.write("\r" + label + frames[index % len(frames)])
+        sys.stdout.flush()
+        index += 1
+        time.sleep(0.08)
+    worker.join()
+    sys.stdout.write("\r" + " " * (len(label) + 1) + "\r")
+    sys.stdout.flush()
+    if "error" in result:
+        raise result["error"]  # type: ignore[misc]
+    return result.get("value")
+
+
 def _run_with_spinner(message: str, argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str] | None:
     """Run a blocking subprocess, animating a loading spinner on a TTY while it works.
 
@@ -1149,7 +1225,7 @@ def cmd_publish(all_posts: bool, slugs: list[str]) -> int:
     for post in targets:
         set_post_published(post.source_path, True)
     try:
-        build_site(config)
+        _with_spinner("正在构建站点 ……", build_site, config)
     except Exception as exc:
         for source_path, original in originals.items():
             source_path.write_text(original, encoding="utf-8")
