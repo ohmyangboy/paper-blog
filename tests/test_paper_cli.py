@@ -174,8 +174,9 @@ class PaperCliTests(unittest.TestCase):
             watcher = threading.Thread(target=_watch_preview, args=(config, state, stop), daemon=True)
             watcher.start()
             try:
+                self.assertTrue(state.watcher_ready.wait(timeout=1))
                 source.write_text("---\ntitle: Draft\n---\n\nAfter", encoding="utf-8")
-                deadline = time.monotonic() + 3
+                deadline = time.monotonic() + 5
                 output = config.output_dir / "posts" / "draft" / "index.html"
                 while time.monotonic() < deadline and "After" not in output.read_text(encoding="utf-8"):
                     time.sleep(0.05)
@@ -184,6 +185,77 @@ class PaperCliTests(unittest.TestCase):
             finally:
                 stop.set()
                 watcher.join(timeout=1)
+
+    def test_preview_watcher_batches_a_burst_of_changes(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            source = posts / "draft.md"
+            source.write_text("Before", encoding="utf-8")
+            config = PaperConfig(posts_dir=posts, site_dir=root_path / "preview")
+            state = _PreviewState()
+            stop = threading.Event()
+            with mock.patch("paper_cli.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
+                "paper_cli.PREVIEW_DEBOUNCE_SECONDS", 0.4, create=True
+            ), mock.patch("paper_cli.build_site") as rebuild:
+                watcher = threading.Thread(target=_watch_preview, args=(config, state, stop), daemon=True)
+                watcher.start()
+                try:
+                    self.assertTrue(state.watcher_ready.wait(timeout=1))
+                    rebuild.reset_mock()
+                    changes = ("First", "Second", "Third")
+                    for index, content in enumerate(changes):
+                        source.write_text(content, encoding="utf-8")
+                        if index < len(changes) - 1:
+                            time.sleep(0.3)
+                    time.sleep(0.15)
+                    self.assertEqual(rebuild.call_count, 0)
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline and rebuild.call_count == 0:
+                        time.sleep(0.02)
+                    self.assertEqual(rebuild.call_count, 1)
+                finally:
+                    stop.set()
+                    watcher.join(timeout=1)
+
+    def test_preview_manual_refresh_rebuilds_pending_changes_immediately(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            source = posts / "draft.md"
+            source.write_text("Before", encoding="utf-8")
+            config = PaperConfig(posts_dir=posts, site_dir=root_path / "preview")
+            state = _PreviewState()
+            stop = threading.Event()
+            with mock.patch("paper_cli.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
+                "paper_cli.PREVIEW_DEBOUNCE_SECONDS", 10.0, create=True
+            ), mock.patch("paper_cli.build_site") as rebuild:
+                watcher = threading.Thread(target=_watch_preview, args=(config, state, stop), daemon=True)
+                watcher.start()
+                try:
+                    self.assertTrue(state.watcher_ready.wait(timeout=1))
+                    rebuild.reset_mock()
+                    source.write_text("After", encoding="utf-8")
+                    state.request_refresh(timeout=1)
+                    self.assertEqual(rebuild.call_count, 1)
+                finally:
+                    stop.set()
+                    watcher.join(timeout=1)
+
+    def test_preview_document_request_triggers_immediate_refresh_only_for_html(self):
+        handler = object.__new__(paper_cli._PreviewHandler)
+        handler.preview_state = mock.Mock()
+        with mock.patch.object(paper_cli.http.server.SimpleHTTPRequestHandler, "do_GET"):
+            handler.path = "/posts/draft/"
+            handler.do_GET()
+            handler.preview_state.request_refresh.assert_called_once_with()
+
+            handler.preview_state.request_refresh.reset_mock()
+            handler.path = "/assets/image.png"
+            handler.do_GET()
+            handler.preview_state.request_refresh.assert_not_called()
 
     def test_article_console_keeps_homepage_first_and_uses_status_lights(self):
         with tempfile.TemporaryDirectory() as root:

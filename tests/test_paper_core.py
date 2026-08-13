@@ -365,6 +365,7 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn("letter-spacing: 0.02em", home)
             self.assertIn("line-height: 1.5", home)
             self.assertIn("cursor: pointer", home)
+            self.assertIn("text-decoration-color: var(--link-underline)", home)
             self.assertIn('class="container home-container"', home)
             self.assertIn("@media (min-width: 48rem) { .home-container { margin-top: 4rem; } }", home)
             self.assertIn("margin-inline: auto", home)

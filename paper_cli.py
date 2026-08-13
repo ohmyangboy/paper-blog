@@ -22,7 +22,7 @@ import tty
 import unicodedata
 import webbrowser
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from urllib.parse import quote
@@ -53,6 +53,8 @@ BOLD = "\033[1m"
 GRAY = "\033[90m"
 RESET = "\033[0m"
 PAPER_BANNER = f"  {TERRACOTTA}Paper{RESET} {BOLD}Blog{RESET}"
+PREVIEW_POLL_SECONDS = 0.5
+PREVIEW_DEBOUNCE_SECONDS = 3.0
 _ALT_SCREEN_ENTER = "\033[?1049h"
 _ALT_SCREEN_LEAVE = "\033[?1049l"
 _alt_screen_depth = 0
@@ -95,10 +97,24 @@ atexit.register(_restore_terminal_screen)
 class _PreviewState:
     revision: int = 0
     error: str = ""
+    refresh_requested: threading.Event = field(default_factory=threading.Event, repr=False)
+    refresh_completed: threading.Event = field(default_factory=threading.Event, repr=False)
+    watcher_ready: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def bump(self) -> None:
         self.revision += 1
         self.error = ""
+
+    def request_refresh(self, *, timeout: float = 5.0) -> bool:
+        """Ask the watcher to process pending changes before serving a document."""
+
+        self.refresh_completed.clear()
+        self.refresh_requested.set()
+        return self.refresh_completed.wait(timeout)
+
+    def finish_refresh(self) -> None:
+        self.refresh_requested.clear()
+        self.refresh_completed.set()
 
 
 def _source_snapshot(posts_dir: Path) -> tuple[tuple[str, int, int], ...]:
@@ -117,28 +133,38 @@ def _source_snapshot(posts_dir: Path) -> tuple[tuple[str, int, int], ...]:
 
 
 def _watch_preview(config: PaperConfig, state: _PreviewState, stop: threading.Event) -> None:
-    """Poll source files with no extra dependency and atomically rebuild previews."""
+    """Poll sources and batch rebuilds after the current editing burst settles."""
 
     previous = _source_snapshot(config.posts_dir)
-    try:
-        build_site(config, include_drafts=True, live_reload=True)
-        state.bump()
-    except Exception as exc:  # pragma: no cover - shown in the running terminal
-        state.error = str(exc)
-    while not stop.wait(0.25):
+    state.watcher_ready.set()
+    pending_since: float | None = None
+    while not stop.is_set():
+        refresh_now = state.refresh_requested.wait(PREVIEW_POLL_SECONDS)
+        if stop.is_set():
+            break
         current = _source_snapshot(config.posts_dir)
-        if current == previous:
+        if current != previous:
+            previous = current
+            pending_since = time.monotonic()
+        should_rebuild = pending_since is not None and (
+            refresh_now or time.monotonic() - pending_since >= PREVIEW_DEBOUNCE_SECONDS
+        )
+        if not should_rebuild:
+            if refresh_now:
+                state.finish_refresh()
             continue
         try:
             build_site(config, include_drafts=True, live_reload=True)
         except Exception as exc:  # keep serving the last good output
             state.error = str(exc)
-            previous = current
             print(f"\n⚠️ 预览重建失败，继续保留上一次结果：{exc}", file=sys.stderr)
         else:
-            previous = current
             state.bump()
-            print("\n↻ Markdown 已更新，浏览器即将自动刷新。")
+            print("\n↻ Markdown 修改已合并更新，浏览器即将自动刷新。")
+        finally:
+            pending_since = None
+            if refresh_now:
+                state.finish_refresh()
 
 
 def _error(message: str, code: int = 2) -> int:
@@ -1020,7 +1046,8 @@ class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] == "/.paper-revision":
+        request_path = self.path.split("?", 1)[0]
+        if request_path == "/.paper-revision":
             revision = self.preview_state.revision if self.preview_state else 0
             payload = str(revision).encode("ascii")
             self.send_response(200)
@@ -1030,6 +1057,8 @@ class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.preview_state and (request_path.endswith("/") or request_path.endswith(".html")):
+            self.preview_state.request_refresh()
         super().do_GET()
 
     def end_headers(self) -> None:
@@ -1064,6 +1093,7 @@ def cmd_serve(port: int) -> int:
         daemon=True,
     )
     watcher.start()
+    preview_state.watcher_ready.wait()
     handler = partial(_PreviewHandler, directory=str(output))
     try:
         try:
@@ -1083,6 +1113,7 @@ def cmd_serve(port: int) -> int:
                 print("\n已停止预览。")
     finally:
         stop_watcher.set()
+        preview_state.refresh_requested.set()
         watcher.join(timeout=1)
         shutil.rmtree(preview_config.site_dir, ignore_errors=True)
     return 0
