@@ -664,7 +664,7 @@ body {
   background-color: var(--bg);
   color: var(--text);
   line-height: 1.7;
-  letter-spacing: -0.011em;
+  letter-spacing: 0.02em;
   padding: 4rem 2rem;
   min-height: 100vh;
   display: flex;
@@ -725,7 +725,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown tbody tr:nth-child(even) td { background-color: var(--code-bg); }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
-.markdown img { display: block; max-width: 100%; height: auto; border-radius: 6px; }
+.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }
@@ -778,6 +778,33 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _copy_referenced_assets(build_dir: Path, posts_dir: Path, asset_base: str) -> None:
+    """Copy only assets referenced by generated HTML into the build output."""
+
+    assets = posts_dir / "assets"
+    if not assets.is_dir():
+        return
+    symlinks = [path for path in assets.rglob("*") if path.is_symlink()]
+    if symlinks:
+        raise ValueError(f"assets 不允许包含符号链接：{symlinks[0]}")
+    pattern = re.compile(r'(?:src|href)="' + re.escape(asset_base) + r'([^"?#]+)')
+    referenced: set[Path] = set()
+    for page in build_dir.rglob("*.html"):
+        rendered = page.read_text(encoding="utf-8")
+        for match in pattern.finditer(rendered):
+            relative = Path(unquote(html.unescape(match.group(1))))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            referenced.add(relative)
+    for relative in sorted(referenced, key=str):
+        source = assets / relative
+        if not source.is_file():
+            continue
+        target = build_dir / "assets" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload: bool = False) -> Path:
     """Build into a temporary tree, then atomically replace only generated output."""
 
@@ -813,12 +840,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             article += f'<div class="markdown">{render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)}</div></article></main>'
             _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
 
-        assets = posts_dir / "assets"
-        if assets.is_dir():
-            symlinks = [path for path in assets.rglob("*") if path.is_symlink()]
-            if symlinks:
-                raise ValueError(f"assets 不允许包含符号链接：{symlinks[0]}")
-            shutil.copytree(assets, temp_parent / "assets")
+        _copy_referenced_assets(temp_parent, posts_dir, asset_base)
 
         rss_items = []
         sitemap_urls = [_absolute_href(config, "/")]

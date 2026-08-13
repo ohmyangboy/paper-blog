@@ -278,23 +278,28 @@ class PaperCoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 discover_posts(posts_dir)
 
-    def test_build_site_outputs_published_posts_rss_sitemap_and_assets(self):
+    def test_build_site_outputs_published_posts_rss_sitemap_and_only_referenced_assets(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             posts_dir = root_path / "posts"
             site_dir = root_path / "site"
             posts_dir.mkdir()
             (posts_dir / "index.md").write_text("# Home\n\nWelcome", encoding="utf-8")
-            (posts_dir / "public.md").write_text("---\ntitle: Public\npublished: true\n---\n\nHello", encoding="utf-8")
+            (posts_dir / "public.md").write_text(
+                "---\ntitle: Public\npublished: true\n---\n\n![Used](assets/used.png)",
+                encoding="utf-8",
+            )
             (posts_dir / "private.md").write_text("---\ntitle: Private\n---\n\nSecret", encoding="utf-8")
             (posts_dir / "assets").mkdir()
             (posts_dir / "assets" / "a.txt").write_text("asset", encoding="utf-8")
+            (posts_dir / "assets" / "used.png").write_bytes(b"used")
             output = build_site(PaperConfig(posts_dir=posts_dir, site_dir=site_dir, site_url="https://example.test"))
             self.assertTrue((output / "index.html").exists())
             self.assertIn("Public", (output / "index.html").read_text(encoding="utf-8"))
             self.assertTrue((output / "posts" / "public" / "index.html").exists())
             self.assertFalse((output / "posts" / "private" / "index.html").exists())
-            self.assertTrue((output / "assets" / "a.txt").exists())
+            self.assertTrue((output / "assets" / "used.png").exists())
+            self.assertFalse((output / "assets" / "a.txt").exists())
             self.assertIn("Public", (output / "rss.xml").read_text(encoding="utf-8"))
             self.assertIn("public", (output / "sitemap.xml").read_text(encoding="utf-8"))
 
@@ -314,6 +319,68 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn('src="/assets/Pasted image.png"', article)
             self.assertIn('width="320"', article)
             self.assertEqual((output / "assets" / image_name).read_bytes(), b"\x89PNG site")
+
+    def test_build_site_removes_asset_after_article_stops_referencing_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            article = posts / "article.md"
+            image_name = "old.png"
+            (posts / image_name).write_bytes(b"old")
+            article.write_text(
+                f"---\ntitle: Article\npublished: true\n---\n\n![[{image_name}]]",
+                encoding="utf-8",
+            )
+            config = PaperConfig(posts_dir=posts, site_dir=root_path / "site")
+            first_output = build_site(config)
+            self.assertTrue((first_output / "assets" / image_name).exists())
+
+            article.write_text(
+                "---\ntitle: Article\npublished: true\n---\n\n图片已经删除。",
+                encoding="utf-8",
+            )
+            second_output = build_site(config)
+            self.assertFalse((second_output / "assets" / image_name).exists())
+            self.assertTrue((posts / "assets" / image_name).exists())
+
+    def test_build_site_keeps_configured_local_favicon_and_centers_images(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            assets = posts / "assets"
+            assets.mkdir(parents=True)
+            (assets / "favicon.png").write_bytes(b"icon")
+            output = build_site(
+                PaperConfig(
+                    posts_dir=posts,
+                    site_dir=root_path / "site",
+                    icon="assets/favicon.png",
+                )
+            )
+            home = (output / "index.html").read_text(encoding="utf-8")
+            self.assertTrue((output / "assets" / "favicon.png").exists())
+            self.assertIn("letter-spacing: 0.02em", home)
+            self.assertIn("margin-inline: auto", home)
+            self.assertIn("border: 1px solid var(--border)", home)
+
+    def test_build_site_only_includes_draft_assets_in_preview(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            assets = posts / "assets"
+            assets.mkdir(parents=True)
+            (assets / "draft.png").write_bytes(b"draft")
+            (posts / "draft.md").write_text(
+                "---\ntitle: Draft\npublished: false\n---\n\n![Draft](assets/draft.png)",
+                encoding="utf-8",
+            )
+            config = PaperConfig(posts_dir=posts, site_dir=root_path / "site")
+            production = build_site(config)
+            self.assertFalse((production / "assets" / "draft.png").exists())
+
+            preview = build_site(config, include_drafts=True)
+            self.assertTrue((preview / "assets" / "draft.png").exists())
 
     def test_site_url_base_path_is_not_repeated_in_feeds(self):
         with tempfile.TemporaryDirectory() as root:

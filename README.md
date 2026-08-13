@@ -36,9 +36,11 @@ Paper 使用 `markdown-it-py` 的 CommonMark 基线，并启用表格、删除�
 
 **单回车会渲染成换行（`breaks` 模式）**：编辑器里按下回车的地方，页面里就是一行换行。顶层内容块之间的空白行也会显示为留白，每处最多保留两行，避免误输入制造过大的页面空洞。这与 GitHub 的渲染不同，写给 GitHub 用的 Markdown 如需换行请用两个空格结尾。
 
-本地图片推荐放在文章目录的 `assets/` 中，写作 `![说明](assets/image.png)`；也可以直接引用其他本地路径（如 `photos/a.png` 或绝对路径），构建/预览时会自动把这些图片拷进 `assets/`，保证线上可以展示。外链图片会输出 `referrerpolicy="no-referrer"`，避免部分 CDN 因本地预览 Referer 返回 403。
+本地图片推荐放在文章目录的 `assets/` 中，写作 `![说明](assets/image.png)`；也可以直接引用其他本地路径（如 `photos/a.png` 或绝对路径），构建/预览时会自动把这些图片拷进 `assets/`，保证线上可以展示。每次生成都会从当前页面引用重新计算发布资源，`out/assets` 不会保留已经从文章中删除或替换的旧图片；源文章目录中的素材不会被自动删除。外链图片会输出 `referrerpolicy="no-referrer"`，避免部分 CDN 因本地预览 Referer 返回 403。
 
 Obsidian 图片支持 `![[image.png]]`、`![[image.png|说明]]`、`![[image.png|300]]` 和 `![[image.png|300x200]]`。明确的相对路径优先；只有文件名时会递归查找已关联的文章目录，文件名必须唯一。找不到图片时页面显示占位提示，重名时构建会要求补充路径。Paper 不搜索关联目录之外的附件，也不展开 `![[笔记]]`。
+
+正文图片默认居中显示，使用 8px 轻圆角和跟随明暗主题的 1px 淡描边；窄屏下保持等比缩放。
 
 选择 Obsidian 作为编辑器后，位于 Obsidian vault 内的文章会通过 Obsidian URI 作为库内笔记打开，以便索引、内部链接和附件按 vault 工作；不在 vault 内的文件仍按普通文件打开。Paper 不控制 Obsidian 左侧文件树是否自动展开。
 

@@ -17,7 +17,7 @@ Python 是用户可见的唯一 runtime，也是唯一 build graph。Node、npm�
 - 原稿：`paper link` 关联的目录，默认只扫描顶层 `.md`。
 - 配置：`~/.paper/config.json`（设置 `PAPER_HOME` 可用于测试或隔离环境）。
 - 生成物：`~/.paper/site/out`，构建使用临时目录和备份交换，避免失败时先删除旧站点。
-- 资源：仅复制 `posts/assets/`，符号链接直接拒绝，避免把站点外文件发布出去。
+- 资源：渲染完成后从生成 HTML 收集当前引用，只把对应的 `posts/assets/` 文件复制到 `out/assets/`；生产构建不带草稿专属资源，预览构建包含草稿资源。源素材不做破坏性清理，符号链接直接拒绝。
 - 草稿：缺少 `published: true` 时默认为草稿；生产构建不输出草稿，预览构建输出并标记草稿。
 
 ## Markdown Profile
