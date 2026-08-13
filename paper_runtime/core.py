@@ -678,7 +678,7 @@ h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: -0.02em; margin-bottom
 h2 { font-size: 0.875rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; margin-top: 2.25rem; margin-bottom: 1rem; color: var(--subtext); }
 h3 { font-size: 1.1rem; font-weight: 500; margin-top: 1.75rem; margin-bottom: 0.75rem; color: var(--text); }
 p { margin-top: 1.25rem; margin-bottom: 1.25rem; color: var(--text); }
-a { color: var(--text); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; transition: color 0.15s ease, text-decoration-color 0.15s ease; }
+a { color: var(--text); cursor: pointer; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; transition: color 0.15s ease, text-decoration-color 0.15s ease; }
 a:hover { color: var(--primary); text-decoration-color: var(--primary); }
 ul, ol { margin-left: 1.25rem; margin-top: 1rem; margin-bottom: 1.25rem; }
 li { margin-bottom: 0.4rem; }
