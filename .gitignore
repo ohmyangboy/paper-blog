@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.py[cod]
+build/
+*.egg-info/
 
 # 遗留构建产物 / 历史 Next.js 原型生成的目录（不进 git）
 node_modules/
