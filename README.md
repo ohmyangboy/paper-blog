@@ -4,7 +4,7 @@
   <h1>Paper</h1>
 
   <p><strong>写简单的文字，做干净的博客。</strong></p>
-  <p>从 Markdown 写作到 GitHub Pages 上线，一条 macOS 优先的极简路径。</p>
+  <p>从 Markdown 写作到 GitHub Pages 上线，一条 创作的极简路径。</p>
 
   <p>
     <a href="https://ohmyangboy.github.io/paper-blog/">官方网站</a> ·
