@@ -13,16 +13,18 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 try:
     from markdown_it import MarkdownIt
+    from markdown_it.token import Token
     from pygments import highlight as pygments_highlight
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import get_lexer_by_name
     from pygments.util import ClassNotFound
 except ImportError:  # pragma: no cover - exercised by doctor/packaging tests
     MarkdownIt = None
+    Token = None
     pygments_highlight = None
     HtmlFormatter = None
     get_lexer_by_name = None
@@ -275,6 +277,30 @@ def _task_list_transform(rendered: str) -> str:
     return pattern.sub(replace, rendered)
 
 
+def _preserve_top_level_blank_lines(state: Any) -> None:
+    """Insert up to two visible spacer tokens between top-level source blocks."""
+
+    if Token is None:
+        return
+    blocks = [
+        (index, token)
+        for index, token in enumerate(state.tokens)
+        if token.level == 0 and token.map is not None and token.nesting != -1
+    ]
+    inserts: list[tuple[int, list[Any]]] = []
+    for (_previous_index, previous), (current_index, current) in zip(blocks, blocks[1:]):
+        blank_lines = max(0, current.map[0] - previous.map[1])
+        spacers = []
+        for _ in range(min(blank_lines, 2)):
+            spacer = Token("html_block", "", 0)
+            spacer.content = '<div class="markdown-blank-line" aria-hidden="true"></div>\n'
+            spacers.append(spacer)
+        if spacers:
+            inserts.append((current_index, spacers))
+    for index, spacers in reversed(inserts):
+        state.tokens[index:index] = spacers
+
+
 _IMAGE_SUFFIXES = {
     ".png",
     ".jpg",
@@ -290,19 +316,31 @@ _IMAGE_SUFFIXES = {
 }
 
 
-def _import_local_image(src: str, posts_dir: Path) -> str | None:
+def _import_local_image(
+    src: str, posts_dir: Path, *, require_unique_name: bool = False
+) -> str | None:
     """Copy a local image referenced in Markdown into posts/assets and return its new relative src.
 
     Returns None when the path is not a readable regular image file, so the original
     reference is left untouched rather than failing the whole build.
     """
 
-    clean = src.split("?")[0].split("#")[0]
+    clean = unquote(src.split("?")[0].split("#")[0])
     if not clean:
         return None
     candidate = Path(clean)
     base = posts_dir.resolve()
     source = candidate if candidate.is_absolute() else base / candidate
+    if not source.exists() and not candidate.is_absolute() and candidate.parent == Path("."):
+        matches = [
+            path for path in base.rglob(candidate.name)
+            if "assets" not in path.relative_to(base).parts
+        ]
+        if len(matches) > 1 and require_unique_name:
+            locations = "、".join(str(path.relative_to(base)) for path in matches)
+            raise ValueError(f"Obsidian 图片名称不唯一：{candidate.name}（{locations}）")
+        if len(matches) == 1:
+            source = matches[0]
     if source.is_symlink():
         return None
     source = source.resolve()
@@ -325,6 +363,46 @@ def _import_local_image(src: str, posts_dir: Path) -> str | None:
     return target.name
 
 
+def _obsidian_image_rule(state: Any, silent: bool) -> bool:
+    """Parse Obsidian image embeds while leaving note embeds as plain text."""
+
+    start = state.pos
+    if not state.src.startswith("![[", start):
+        return False
+    end = state.src.find("]]", start + 3)
+    if end < 0 or "\n" in state.src[start:end]:
+        return False
+    inner = state.src[start + 3:end]
+    target, separator, modifier = inner.partition("|")
+    target = target.strip()
+    if Path(target.split("#", 1)[0]).suffix.lower() not in _IMAGE_SUFFIXES:
+        return False
+    if not silent:
+        token = state.push("image", "img", 0)
+        token.attrs = {"src": target, "alt": ""}
+        label = modifier.strip() if separator else Path(target).name
+        dimensions = re.fullmatch(r"([1-9]\d{0,4})(?:x([1-9]\d{0,4}))?", label)
+        if dimensions:
+            token.attrSet("width", dimensions.group(1))
+            if dimensions.group(2):
+                token.attrSet("height", dimensions.group(2))
+            label = Path(target).name
+        alt = Token("text", "", 0)
+        alt.content = label
+        token.children = [alt]
+        token.content = label
+        token.meta["paper_obsidian_image"] = True
+    state.pos = end + 2
+    return True
+
+
+def _render_missing_image(
+    _renderer: Any, tokens: list[Any], index: int, _options: Any, _env: Any
+) -> str:
+    filename = html.escape(tokens[index].content)
+    return f'<span class="missing-image" role="img">图片未找到：{filename}</span>'
+
+
 def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Path | None = None) -> str:
     """Render the Paper Markdown Profile with raw HTML disabled by default.
 
@@ -336,6 +414,9 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
         raise RuntimeError("Paper 的 Markdown 运行依赖未安装；请重新安装 Paper，不要手动运行 pip。")
     parser = MarkdownIt("js-default", {"highlight": _highlight, "breaks": True})
     parser.enable(["table", "strikethrough"])
+    parser.core.ruler.after("block", "paper_blank_lines", _preserve_top_level_blank_lines)
+    parser.inline.ruler.before("image", "paper_obsidian_image", _obsidian_image_rule)
+    parser.add_render_rule("paper_missing_image", _render_missing_image)
 
     normalized_asset_base = "/" + asset_base.strip("/") + "/"
     import_dir = posts_dir.resolve() if posts_dir is not None else None
@@ -351,9 +432,20 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
                     elif local_src.startswith("assets/"):
                         child.attrSet("src", normalized_asset_base + local_src.removeprefix("assets/"))
                     elif import_dir is not None and not src.startswith(("//", "data:")):
-                        imported = _import_local_image(local_src, import_dir)
+                        imported = _import_local_image(
+                            local_src,
+                            import_dir,
+                            require_unique_name=bool(child.meta.get("paper_obsidian_image")),
+                        )
                         if imported:
                             child.attrSet("src", normalized_asset_base + imported)
+                        elif child.meta.get("paper_obsidian_image"):
+                            child.type = "paper_missing_image"
+                            child.tag = "span"
+                            child.content = unquote(local_src.split("#", 1)[0])
+                            child.attrs = {}
+                            child.children = None
+                            continue
                     child.attrSet("loading", "lazy")
                     child.attrSet("decoding", "async")
                 elif child.type == "link_open":
@@ -575,6 +667,8 @@ footer { margin-top: 4rem; text-align: center; }
 /* Markdown Profile additions: syntax support without changing the site shell. */
 .markdown { font-size: 1rem; line-height: 1.8; }
 .markdown > * + * { margin-top: 1.25rem; }
+.markdown > .markdown-blank-line { height: 1.8em; margin-top: 0; }
+.markdown > .markdown-blank-line + * { margin-top: 0; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-weight: 650; line-height: 1.35; letter-spacing: -0.02em; color: var(--text); text-transform: none; }
 .markdown h1 { font-size: 1.75rem; margin-top: 2.5rem; }
 .markdown h2 { font-size: 1.375rem; margin-top: 2.75rem; }
@@ -599,6 +693,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
 .markdown img { display: block; max-width: 100%; height: auto; border-radius: 6px; }
+.markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }
 @media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } }

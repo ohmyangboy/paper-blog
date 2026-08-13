@@ -12,6 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
 import paper_cli
 from paper_cli import (
@@ -22,6 +23,7 @@ from paper_cli import (
     _list_items,
     _menu_window,
     _open_browser,
+    _open_editor,
     _read_terminal_key,
     _terminal_menu,
     _version_key,
@@ -113,6 +115,50 @@ class PaperCliTests(unittest.TestCase):
             "paper_cli.webbrowser.open", side_effect=webbrowser.Error
         ):
             self.assertFalse(_open_browser("http://127.0.0.1:8000"))
+
+    def test_open_editor_anchors_obsidian_note_inside_vault(self):
+        with tempfile.TemporaryDirectory() as root:
+            vault = Path(root) / "My Vault"
+            note = vault / "paper blog" / "你好 世界.md"
+            (vault / ".obsidian").mkdir(parents=True)
+            note.parent.mkdir()
+            note.write_text("# Note", encoding="utf-8")
+            config = PaperConfig(posts_dir=note.parent, site_dir=vault / ".paper", editor="obsidian")
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "paper_cli.sys.platform", "darwin"
+            ), mock.patch("paper_cli.subprocess.Popen") as popen:
+                _open_editor(note, config)
+            popen.assert_called_once_with([
+                "open",
+                "obsidian://open?path=" + quote(str(note.resolve()), safe=""),
+            ])
+
+    def test_open_editor_falls_back_when_obsidian_uri_cannot_launch(self):
+        with tempfile.TemporaryDirectory() as root:
+            vault = Path(root) / "vault"
+            note = vault / "note.md"
+            (vault / ".obsidian").mkdir(parents=True)
+            note.write_text("# Note", encoding="utf-8")
+            config = PaperConfig(posts_dir=vault, site_dir=vault / ".paper", editor="obsidian")
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "paper_cli.sys.platform", "darwin"
+            ), mock.patch(
+                "paper_cli.subprocess.Popen", side_effect=[OSError("URI unavailable"), mock.DEFAULT]
+            ) as popen:
+                _open_editor(note, config)
+            self.assertEqual(popen.call_count, 2)
+            popen.assert_called_with(["open", "-a", "Obsidian", str(note)])
+
+    def test_open_editor_uses_regular_obsidian_open_outside_vault(self):
+        with tempfile.TemporaryDirectory() as root:
+            note = Path(root) / "note.md"
+            note.write_text("# Note", encoding="utf-8")
+            config = PaperConfig(posts_dir=note.parent, site_dir=note.parent / ".paper", editor="obsidian")
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "paper_cli.sys.platform", "darwin"
+            ), mock.patch("paper_cli.subprocess.Popen") as popen:
+                _open_editor(note, config)
+            popen.assert_called_once_with(["open", "-a", "Obsidian", str(note)])
 
     def test_preview_watcher_rebuilds_after_markdown_changes(self):
         with tempfile.TemporaryDirectory() as root:

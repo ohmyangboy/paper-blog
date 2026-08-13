@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from urllib.parse import quote
 
 from paper_runtime.core import (
     ConfigError,
@@ -850,8 +851,17 @@ def _open_editor(path: Path, config: PaperConfig) -> None:
             subprocess.Popen(["code", str(path)])
         elif editor == "cursor":
             subprocess.Popen(["cursor", str(path)])
-        elif editor in {"typora", "obsidian", "iawriter", "macdown"} and sys.platform == "darwin":
-            app_names = {"typora": "Typora", "obsidian": "Obsidian", "iawriter": "iA Writer", "macdown": "MacDown"}
+        elif editor == "obsidian" and sys.platform == "darwin":
+            resolved = path.resolve()
+            if any((parent / ".obsidian").is_dir() for parent in resolved.parents):
+                try:
+                    subprocess.Popen(["open", "obsidian://open?path=" + quote(str(resolved), safe="")])
+                except OSError:
+                    subprocess.Popen(["open", "-a", "Obsidian", str(path)])
+            else:
+                subprocess.Popen(["open", "-a", "Obsidian", str(path)])
+        elif editor in {"typora", "iawriter", "macdown"} and sys.platform == "darwin":
+            app_names = {"typora": "Typora", "iawriter": "iA Writer", "macdown": "MacDown"}
             subprocess.Popen(["open", "-a", app_names[editor], str(path)])
         elif editor:
             subprocess.Popen([editor, str(path)])

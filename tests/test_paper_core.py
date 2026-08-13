@@ -45,6 +45,11 @@ class PaperCoreTests(unittest.TestCase):
         self.assertIn("<p>第一段</p>", rendered)
         self.assertIn("<p>第二段</p>", rendered)
 
+    def test_markdown_preserves_at_most_two_source_blank_lines_as_visible_space(self):
+        source = "# 标题\n\n第一段\n\n\n\n第二段"
+        rendered = render_markdown(source)
+        self.assertEqual(rendered.count('class="markdown-blank-line"'), 3)
+
     def test_markdown_images_avoid_hotlink_referrer_and_rewrite_local_assets(self):
         remote = render_markdown("![avatar](https://cdn.example.test/avatar.png)")
         local = render_markdown("![cover](assets/cover.png)", asset_base="/blog/assets/")
@@ -60,6 +65,87 @@ class PaperCoreTests(unittest.TestCase):
             rendered = render_markdown("![x](photos/a.png)", posts_dir=posts)
             self.assertIn('src="/assets/a.png"', rendered)
             self.assertTrue((posts / "assets" / "a.png").exists())
+
+    def test_markdown_imports_obsidian_image_embed_with_spaces(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            image_name = "Pasted image 20260813131935.png"
+            (posts / image_name).write_bytes(b"\x89PNG obsidian")
+            rendered = render_markdown(f"![[{image_name}]]", posts_dir=posts)
+            self.assertIn('<img src="/assets/Pasted image 20260813131935.png"', rendered)
+            self.assertNotIn("![[", rendered)
+            self.assertTrue((posts / "assets" / image_name).exists())
+
+    def test_markdown_supports_obsidian_image_alias_and_dimensions(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "photo.png").write_bytes(b"\x89PNG dimensions")
+            alias = render_markdown("![[photo.png|产品截图]]", posts_dir=posts)
+            width = render_markdown("![[photo.png|300]]", posts_dir=posts)
+            dimensions = render_markdown("![[photo.png|300x200]]", posts_dir=posts)
+            self.assertIn('alt="产品截图"', alias)
+            self.assertIn('width="300"', width)
+            self.assertNotIn('height=', width)
+            self.assertIn('width="300"', dimensions)
+            self.assertIn('height="200"', dimensions)
+
+    def test_markdown_shows_placeholder_for_missing_obsidian_image(self):
+        with tempfile.TemporaryDirectory() as root:
+            rendered = render_markdown("前文\n\n![[missing image.png]]\n\n后文", posts_dir=Path(root))
+            self.assertIn('class="missing-image"', rendered)
+            self.assertIn("图片未找到：missing image.png", rendered)
+            self.assertIn("前文", rendered)
+            self.assertIn("后文", rendered)
+
+    def test_markdown_rejects_ambiguous_obsidian_image_name(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a").mkdir()
+            (posts / "b").mkdir()
+            (posts / "a" / "same.png").write_bytes(b"A")
+            (posts / "b" / "same.png").write_bytes(b"B")
+            with self.assertRaisesRegex(ValueError, "图片名称不唯一"):
+                render_markdown("![[same.png]]", posts_dir=posts)
+
+    def test_markdown_keeps_obsidian_note_and_code_embeds_as_text(self):
+        rendered = render_markdown(
+            "![[另一篇笔记]]\n\n`![[inline.png]]`\n\n```md\n![[block.png]]\n```"
+        )
+        self.assertIn("![[另一篇笔记]]", rendered)
+        self.assertIn("<code>![[inline.png]]</code>", rendered)
+        self.assertIn("![[block.png]]", rendered)
+        self.assertNotIn("<img", rendered)
+
+    def test_markdown_obsidian_explicit_path_wins_over_duplicate_filename(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a").mkdir()
+            (posts / "b").mkdir()
+            (posts / "a" / "same.png").write_bytes(b"A")
+            (posts / "b" / "same.png").write_bytes(b"B")
+            rendered = render_markdown("![[a/same.png]]", posts_dir=posts)
+            self.assertIn('src="/assets/same.png"', rendered)
+            self.assertEqual((posts / "assets" / "same.png").read_bytes(), b"A")
+
+    def test_markdown_imports_standard_image_with_spaces(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            image_name = "Pasted image 20260813131935.png"
+            (posts / image_name).write_bytes(b"\x89PNG commonmark")
+            rendered = render_markdown(f"![截图](<{image_name}>)", posts_dir=posts)
+            self.assertIn(f'src="/assets/{image_name}"', rendered)
+            self.assertTrue((posts / "assets" / image_name).exists())
+
+    def test_markdown_finds_unique_obsidian_attachment_in_nested_posts_folder(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            attachments = posts / "attachments"
+            attachments.mkdir()
+            image_name = "Pasted image 20260813131935.png"
+            (attachments / image_name).write_bytes(b"\x89PNG vault")
+            rendered = render_markdown(f"![[{image_name}]]", posts_dir=posts)
+            self.assertIn(f'src="/assets/{image_name}"', rendered)
+            self.assertTrue((posts / "assets" / image_name).exists())
 
     def test_markdown_imports_absolute_local_image_into_assets(self):
         with tempfile.TemporaryDirectory() as root:
@@ -163,6 +249,23 @@ class PaperCoreTests(unittest.TestCase):
             self.assertTrue((output / "assets" / "a.txt").exists())
             self.assertIn("Public", (output / "rss.xml").read_text(encoding="utf-8"))
             self.assertIn("public", (output / "sitemap.xml").read_text(encoding="utf-8"))
+
+    def test_build_site_publishes_obsidian_embedded_image(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            image_name = "Pasted image.png"
+            (posts / image_name).write_bytes(b"\x89PNG site")
+            (posts / "article.md").write_text(
+                f"---\ntitle: Article\npublished: true\n---\n\n![[{image_name}|320]]",
+                encoding="utf-8",
+            )
+            output = build_site(PaperConfig(posts_dir=posts, site_dir=root_path / "site"))
+            article = (output / "posts" / "article" / "index.html").read_text(encoding="utf-8")
+            self.assertIn('src="/assets/Pasted image.png"', article)
+            self.assertIn('width="320"', article)
+            self.assertEqual((output / "assets" / image_name).read_bytes(), b"\x89PNG site")
 
     def test_site_url_base_path_is_not_repeated_in_feeds(self):
         with tempfile.TemporaryDirectory() as root:
