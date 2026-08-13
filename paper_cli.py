@@ -931,8 +931,14 @@ def cmd_serve(port: int) -> int:
     return 0
 
 
-def _git(config: PaperConfig, *args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", "-C", str(config.site_dir), *args], check=False, text=True, capture_output=capture)
+def _git(config: PaperConfig, *args: str, capture: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(config.site_dir), *args],
+        check=False,
+        text=True,
+        capture_output=capture,
+        timeout=timeout,
+    )
 
 
 def _managed_origin(config: PaperConfig) -> str | None:
@@ -982,18 +988,26 @@ def cmd_deploy() -> int:
         current_remote = _git(config, "remote", "get-url", "origin", capture=True)
         if current_remote.returncode != 0 or current_remote.stdout.strip() != config.git_remote:
             return _error("托管仓库的 origin 与 Paper 配置不一致，请先确认 remote，避免推送到错误仓库。")
+    print("  · 暂存并提交站点更新……")
     if _git(config, "add", "out").returncode != 0:
         return _error("无法暂存静态输出")
     committed = _git(config, "commit", "-m", "paper: update site", "--allow-empty")
     if committed.returncode != 0:
         return _error("Git commit 失败，请检查 user.name、user.email 或 hooks。")
-    pushed = _git(config, "subtree", "push", "--prefix", "out", "origin", "gh-pages", capture=True)
+    print(f"  · 正在推送 gh-pages 到 {config.git_remote} ……")
+    print("    （这一步需要联网上传，首次或网络较慢时可能要等几十秒到几分钟；下方出现 git 传输进度即表示在正常推送）")
+    try:
+        pushed = _git(config, "subtree", "push", "--prefix", "out", "origin", "gh-pages", timeout=600)
+    except subprocess.TimeoutExpired:
+        print("❌ 推送超时（10 分钟仍未完成）——通常是网络无法稳定连接 GitHub。", file=sys.stderr)
+        print("   建议：在配置面板「GitHub 远程 → 测试连接」检查连通性，网络恢复后执行 paper deploy 重试。", file=sys.stderr)
+        return 1
     if pushed.returncode != 0:
         print("❌ GitHub Pages 推送失败；本地状态保留，可稍后执行 paper deploy 重试。", file=sys.stderr)
-        if pushed.stderr:
-            print(pushed.stderr.strip(), file=sys.stderr)
+        print("   常见原因：网络连不上 GitHub、SSH 密钥 / 个人访问令牌未配置或已失效、仓库地址填错。", file=sys.stderr)
+        print("   建议：配置面板「GitHub 远程 → 测试连接」检查连通性，或 ssh -T git@github.com 验证认证。", file=sys.stderr)
         return 1
-    print("✅ 已推送 gh-pages；Pages 可能仍需数分钟完成构建。")
+    print("✅ 已推送 gh-pages；GitHub Pages 可能仍需数分钟完成构建。")
     return 0
 
 
