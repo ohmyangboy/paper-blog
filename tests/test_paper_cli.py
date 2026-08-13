@@ -548,12 +548,13 @@ class GitHubRemoteConfigTests(unittest.TestCase):
                     self.assertEqual(cmd_config(), 0)
                 output = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
                 self.assertIn("🧭 GitHub Pages 发布向导（4 步）", output)
-                self.assertIn("▶ 1.创建仓库", output)  # active step highlight
-                self.assertIn("✓ 1.创建仓库", output)  # completed step check
-                self.assertIn("▶ 4.发布开启", output)
+                self.assertIn("● 1.创建仓库", output)  # active tab highlight
+                self.assertIn("✓ 1.创建仓库", output)  # completed tab check
+                self.assertIn("● 4.发布开启", output)
                 self.assertIn("已为你打开 GitHub 新建仓库页", output)
                 self.assertIn("git@github.com:用户名/仓库.git", output)
                 self.assertIn("✓ 已识别：octocat/Hello-World", output)
+                self.assertIn("┌", output)  # boxed tab bar / panel border
             finally:
                 self._restore_paper_home(old_home)
 

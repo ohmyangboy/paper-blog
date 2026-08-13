@@ -18,6 +18,7 @@ import termios
 import threading
 import time
 import tty
+import unicodedata
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -576,21 +577,59 @@ def _confirm_or_skip(message: str) -> bool:
 _WIZARD_STEPS = ("创建仓库", "粘贴地址", "核对保存", "发布开启")
 
 
-def _wizard_stepper(current: int) -> None:
-    """Print a compact 4-step tracker with the active step highlighted.
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI SGR escape sequences so visible width can be measured."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
-    Rendered as one line, e.g. ``✓ 1.创建仓库  ▶ 2.粘贴地址  3.核对保存  4.发布开启``,
-    so the user always sees where they are in the wizard and what comes next.
+
+def _display_width(text: str) -> int:
+    """Visible column width, counting CJK/wide glyphs as two columns."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1 for ch in text)
+
+
+def _wizard_tabs(current: int) -> None:
+    """Render the four wizard steps as a boxed tab bar.
+
+    The active step's tab is highlighted (terracotta, bold), completed steps are
+    green with a ✓, upcoming are gray. The highlight moves forward as the user
+    advances, so only the tab bar — not all four steps' text — is ever shown.
     """
-    cells = []
+    width = 14
+    top, mid, bot = "  ", "  ", "  "
     for index, name in enumerate(_WIZARD_STEPS, start=1):
         if index < current:
-            cells.append(f"{GREEN}✓ {index}.{name}{RESET}")
+            color, mark = GREEN, "✓"
         elif index == current:
-            cells.append(f"{TERRACOTTA}{BOLD}▶ {index}.{name}{RESET}")
+            color, mark = TERRACOTTA + BOLD, "●"
         else:
-            cells.append(f"{GRAY}  {index}.{name}{RESET}")
-    print(f"  {'  '.join(cells)}")
+            color, mark = GRAY, " "
+        plain = f"{mark} {index}.{name}"
+        inner = plain + " " * max(width - _display_width(plain), 0)
+        top += f"{color}┌{'─' * width}┐{RESET}  "
+        mid += f"{color}│{inner}│{RESET}  "
+        bot += f"{color}└{'─' * width}┘{RESET}  "
+    print(top.rstrip())
+    print(mid.rstrip())
+    print(bot.rstrip())
+
+
+def _wizard_panel(title: str, body: list[tuple[str, str]]) -> None:
+    """Render a bordered content panel.
+
+    ``body`` rows are ``(kind, text)`` where ``kind`` is ``"hint"`` (dim gray
+    instruction) or ``"content"`` (bold primary text) — the visual separation
+    the wizard needs between guidance and the actual value to act on.
+    """
+    rows = [(kind, text) for kind, text in body]
+    widths = [_display_width(title)] + [_display_width(text) for _, text in rows]
+    width = max(widths)
+    bar = "─" * (width + 2)
+    print(f"  {GRAY}┌{bar}┐{RESET}")
+    print(f"  {GRAY}│{RESET} {TERRACOTTA}{BOLD}{title}{RESET}" + " " * (width - _display_width(title)) + f" {GRAY}│{RESET}")
+    for kind, text in rows:
+        color = GRAY if kind == "hint" else BOLD
+        print(f"  {GRAY}│{RESET} {color}{text}{RESET}" + " " * (width - _display_width(text)) + f" {GRAY}│{RESET}")
+    print(f"  {GRAY}└{bar}┘{RESET}")
 
 
 def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperConfig | None:
@@ -601,13 +640,16 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     and the direct address-input flow.
     """
     origin = _managed_origin(config)
-    print("\n请核对以下信息（保存后发布将推送到该仓库）：")
-    print(f"  仓库所有者：{info.owner}")
-    print(f"  仓库名称：{info.repo}")
-    print(f"  Remote URL：{info.ssh_url}")
-    print(f"  预期 Pages URL：{info.pages_url}")
+    body: list[tuple[str, str]] = [
+        ("hint", "保存后发布将推送到该仓库。请核对："),
+        ("content", f"仓库所有者：{info.owner}"),
+        ("content", f"仓库名称：{info.repo}"),
+        ("content", f"Remote URL：{info.ssh_url}"),
+        ("content", f"预期 Pages URL：{info.pages_url}"),
+    ]
     if origin and origin != info.ssh_url:
-        print(f"  ⚠️ 托管仓库当前 origin：{origin}（与将要保存的不一致）")
+        body.append(("hint", f"⚠️ 当前托管 origin：{origin}（与将要保存的不一致）"))
+    _wizard_panel("核对保存", body)
     if not _confirm_or_skip("\n按 Enter 确认保存 · 按 Space 跳过："):
         print("  ⏭ 已跳过，未修改任何配置。")
         return None
@@ -655,28 +697,37 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         return config
     existing = normalize_git_remote(config.git_remote)
     print("🧭 GitHub Pages 发布向导（4 步）\n")
-    if existing:
-        print(f"  当前已绑定：{existing.owner}/{existing.repo} · {existing.pages_url}")
-        print("  要更换绑定，直接在第 2 步粘贴新地址；要保留当前绑定，留空退出。\n")
-    else:
-        print("  目标：把博客发布到 GitHub Pages。按下面的步骤操作，随时可跳过。\n")
 
-    _wizard_stepper(1)
+    _wizard_tabs(1)
     if existing:
-        print("  ✅ 已绑定仓库，无需新建 —— 直接进入第 2 步粘贴要绑定的地址。")
+        _wizard_panel("创建仓库", [
+            ("content", f"当前已绑定：{existing.owner}/{existing.repo}"),
+            ("hint", "无需新建仓库，直接进入第 2 步粘贴新地址即可换绑。"),
+        ])
     else:
         opened = _open_browser("https://github.com/new")
-        print(f"  {'已为你打开' if opened else '未能自动打开'} GitHub 新建仓库页 https://github.com/new")
-        print("  · 仓库名决定博客地址：你的用户名.github.io → 根路径；其它名字 → /仓库名 子路径")
-        print("  · 可见性选 Public；已有仓库可跳过本步，直接粘贴地址。")
+        open_hint = (
+            "已为你打开 GitHub 新建仓库页，在浏览器里新建一个仓库。"
+            if opened
+            else "未能自动打开浏览器 —— 请手动打开 https://github.com/new 新建一个仓库。"
+        )
+        _wizard_panel("创建仓库", [
+            ("hint", open_hint),
+            ("hint", "· 仓库名决定博客地址：用户名.github.io → 根路径；其它 → /仓库名 子路径"),
+            ("hint", "· 可见性选 Public；已有仓库可跳过本步，直接粘贴地址。"),
+        ])
         if _confirm_or_skip("\n  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）："):
             print("  ✓ 继续")
         else:
             print("  ⏭ 跳过 —— 使用已有仓库，直接进入第 2 步。")
 
-    _wizard_stepper(2)
-    print("\n  支持三种写法（任选其一）：")
-    print(f"    {GRAY}git@github.com:用户名/仓库.git  ·  https://github.com/用户名/仓库  ·  用户名/仓库{RESET}")
+    _wizard_tabs(2)
+    _wizard_panel("粘贴地址", [
+        ("hint", "支持三种写法（任选其一）："),
+        ("content", "git@github.com:用户名/仓库.git"),
+        ("content", "https://github.com/用户名/仓库"),
+        ("content", "用户名/仓库"),
+    ])
     while True:
         raw = _prompt("  仓库地址（留空取消）：")
         if raw is None or not raw:
@@ -689,14 +740,16 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         break
     print(f"  ✓ 已识别：{info.owner}/{info.repo}")
 
-    _wizard_stepper(3)
+    _wizard_tabs(3)
     result = _confirm_and_save_remote(config, info)
     if result is None:
         return config
     config = result
 
-    _wizard_stepper(4)
-    print("\n  gh-pages 分支要等你发布之后才存在，所以顺序是：先发布，再开启 Pages。")
+    _wizard_tabs(4)
+    _wizard_panel("发布开启", [
+        ("hint", "gh-pages 分支要等你发布之后才存在，所以顺序是：先发布，再开启 Pages。"),
+    ])
     if _confirm_or_skip("\n  现在发布并推送 gh-pages 吗？按 Enter 发布 · 按 Space 跳过："):
         cmd_publish(all_posts=False, slugs=[])
         if _gh_pages_pushed(config):
