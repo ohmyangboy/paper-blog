@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import html
 import json
 import os
@@ -274,8 +275,62 @@ def _task_list_transform(rendered: str) -> str:
     return pattern.sub(replace, rendered)
 
 
-def render_markdown(source: str, *, asset_base: str = "/assets/") -> str:
-    """Render the Paper Markdown Profile with raw HTML disabled by default."""
+_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".avif",
+    ".ico",
+    ".tif",
+    ".tiff",
+}
+
+
+def _import_local_image(src: str, posts_dir: Path) -> str | None:
+    """Copy a local image referenced in Markdown into posts/assets and return its new relative src.
+
+    Returns None when the path is not a readable regular image file, so the original
+    reference is left untouched rather than failing the whole build.
+    """
+
+    clean = src.split("?")[0].split("#")[0]
+    if not clean:
+        return None
+    candidate = Path(clean)
+    base = posts_dir.resolve()
+    source = candidate if candidate.is_absolute() else base / candidate
+    if source.is_symlink():
+        return None
+    source = source.resolve()
+    if not source.is_file():
+        return None
+    if source.suffix.lower() not in _IMAGE_SUFFIXES:
+        return None
+    assets_dir = posts_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    target = assets_dir / source.name
+    if target.exists():
+        try:
+            if target.read_bytes() == source.read_bytes():
+                return target.name
+        except OSError:
+            return None
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()[:8]
+        target = assets_dir / f"{source.stem}-{digest}{source.suffix}"
+    shutil.copy2(source, target)
+    return target.name
+
+
+def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Path | None = None) -> str:
+    """Render the Paper Markdown Profile with raw HTML disabled by default.
+
+    When posts_dir is given, local image references (absolute or relative paths)
+    are copied into posts/assets so the built site can serve them.
+    """
 
     if MarkdownIt is None:
         raise RuntimeError("Paper 的 Markdown 运行依赖未安装；请重新安装 Paper，不要手动运行 pip。")
@@ -283,6 +338,7 @@ def render_markdown(source: str, *, asset_base: str = "/assets/") -> str:
     parser.enable(["table", "strikethrough"])
 
     normalized_asset_base = "/" + asset_base.strip("/") + "/"
+    import_dir = posts_dir.resolve() if posts_dir is not None else None
 
     def decorate_links(state: Any) -> None:
         for token in state.tokens:
@@ -290,10 +346,14 @@ def render_markdown(source: str, *, asset_base: str = "/assets/") -> str:
                 if child.type == "image":
                     src = child.attrGet("src") or ""
                     local_src = src.removeprefix("./")
-                    if local_src.startswith("assets/"):
-                        child.attrSet("src", normalized_asset_base + local_src.removeprefix("assets/"))
                     if src.startswith(("http://", "https://")):
                         child.attrSet("referrerpolicy", "no-referrer")
+                    elif local_src.startswith("assets/"):
+                        child.attrSet("src", normalized_asset_base + local_src.removeprefix("assets/"))
+                    elif import_dir is not None and not src.startswith(("//", "data:")):
+                        imported = _import_local_image(local_src, import_dir)
+                        if imported:
+                            child.attrSet("src", normalized_asset_base + imported)
                     child.attrSet("loading", "lazy")
                     child.attrSet("decoding", "async")
                 elif child.type == "link_open":
@@ -614,7 +674,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             )
         listing.append("</div></main>")
         asset_base = _href(config, "/assets/")
-        index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base)}</div></header>' + "\n" + "\n".join(listing)
+        index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
         _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload))
         _write(temp_parent / "404.html", _layout(config, "Not found", "<main><h1>Not found</h1></main>", live_reload=live_reload))
         for post in posts:
@@ -622,7 +682,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
                 continue
             back_icon = '<a href="javascript:history.back()" class="back-icon" title="返回上一页" aria-label="返回上一页"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
             article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
-            article += f'<div class="markdown">{render_markdown(post.content, asset_base=asset_base)}</div></article></main>'
+            article += f'<div class="markdown">{render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)}</div></article></main>'
             _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
 
         assets = posts_dir / "assets"

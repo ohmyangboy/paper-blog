@@ -26,7 +26,9 @@ paper serve
 
 `paper serve` 会自动打开默认浏览器，并监听 Markdown 与 `assets/` 的变化；重建成功后浏览器自动刷新。预览只绑定 `127.0.0.1`，草稿不会进入生产构建。
 
-文章目录只扫描顶层 Markdown 文件。没有 `published: true` 的文章默认为草稿；只有 `assets/` 目录中的本地资源会被复制到静态站点。
+Homebrew 安装的版本可以用 `paper update` 自更新：它会刷新 tap、对比当前版本与最新版本，发现新版本时自动 `brew upgrade`。
+
+文章目录只扫描顶层 Markdown 文件。没有 `published: true` 的文章默认为草稿；`assets/` 目录中的资源会被复制到静态站点，正文里直接引用的其他本地图片（相对或绝对路径）在构建/预览时会自动拷贝进 `assets/`。文章的展示标题默认取文件名（不含扩展名），只有在前置元数据里显式写 `title:` 才覆盖它；`paper new` 生成的草稿不带 title。
 
 ## Markdown Profile
 
@@ -34,7 +36,7 @@ Paper 使用 `markdown-it-py` 的 CommonMark 基线，并启用表格、删除�
 
 **单回车会渲染成换行（`breaks` 模式）**：编辑器里按下回车的地方，页面里就是一行换行，所见即所得。空行仍然分段；这与 GitHub 的渲染不同，写给 GitHub 用的 Markdown 如需换行请用两个空格结尾。
 
-本地图片统一放在文章目录的 `assets/` 中，并在 Markdown 中写作 `![说明](assets/image.png)`。外链图片会输出 `referrerpolicy="no-referrer"`，避免部分 CDN 因本地预览 Referer 返回 403。
+本地图片推荐放在文章目录的 `assets/` 中，写作 `![说明](assets/image.png)`；也可以直接引用其他本地路径（如 `photos/a.png` 或绝对路径），构建/预览时会自动把这些图片拷进 `assets/`，保证线上可以展示。外链图片会输出 `referrerpolicy="no-referrer"`，避免部分 CDN 因本地预览 Referer 返回 403。
 
 `paper config` 可通过方向键设置主题高亮颜色、默认编辑器和 favicon。favicon 支持内置 P 图标、SVG/Data URI、图片 URL，或将本地图片复制到 `assets/`。
 

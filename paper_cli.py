@@ -7,6 +7,7 @@ import argparse
 import atexit
 import datetime as dt
 import http.server
+import json
 import os
 import re
 import select
@@ -878,9 +879,9 @@ def cmd_new(title: str | None) -> int:
         return _error(f"文章已存在：{target.name}", 1)
     today = dt.date.today().isoformat()
     target.parent.mkdir(parents=True, exist_ok=True)
-    escaped_title = title.replace('"', '\\"')
+    # 不写 title：默认用文件名作为展示标题；需要时再手动在 frontmatter 加 title。
     target.write_text(
-        f'---\ntitle: "{escaped_title}"\ndate: {today}\npublished: false\n---\n\n写下你的随想……\n',
+        f'---\ndate: {today}\npublished: false\n---\n\n写下你的随想……\n',
         encoding="utf-8",
     )
     _open_editor(target, config)
@@ -1342,6 +1343,58 @@ def cmd_doctor() -> int:
     return 0 if all(ok for ok, _ in checks[:2]) else 1
 
 
+def _version_key(value: str) -> tuple[int, ...]:
+    """Return a sortable key for versions like 0.1.0 or 0.1.1-beta.1."""
+    release, _, pre = value.partition("-")
+    parts = [int(part) for part in release.split(".") if part.isdigit()]
+    while len(parts) < 3:
+        parts.append(0)
+    if not pre:
+        return tuple(parts + [9999])
+    kind = re.sub(r"[^a-z]", "", pre.split(".")[0].lower())
+    rank = {"alpha": 0, "a": 0, "beta": 1, "b": 1, "pre": 1, "preview": 1, "rc": 2}.get(kind, 1)
+    number = re.search(r"\d+$", pre)
+    return tuple(parts + [rank * 1000 + (int(number.group(0)) if number else 0)])
+
+
+def _is_homebrew_install() -> bool:
+    try:
+        return "/Cellar/paper/" in os.path.realpath(sys.argv[0])
+    except OSError:
+        return False
+
+
+def cmd_update() -> int:
+    """Self-update Paper when installed via the Homebrew tap."""
+    if shutil.which("brew") is None:
+        return _error("未找到 Homebrew，Paper 自更新依赖 brew。请先安装 Homebrew。", 1)
+    if not _is_homebrew_install():
+        print("当前 paper 不是 Homebrew 安装（源码或开发环境），无法用 brew 自更新。")
+        print("请先 `brew install ohmyangboy/tap/paper`，之后即可用 `paper update` 自更新。")
+        return 1
+    print(f"当前版本：paper {VERSION}")
+    print("正在刷新 Homebrew tap …")
+    subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    info = subprocess.run(
+        ["brew", "info", "--json=v2", "ohmyangboy/tap/paper"],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        latest = json.loads(info.stdout)["formulae"][0]["versions"]["stable"]
+    except (KeyError, IndexError, ValueError):
+        return _error("无法读取 Paper 最新版本信息，请检查网络后重试。", 1)
+    print(f"最新版本：paper {latest}")
+    if _version_key(latest) <= _version_key(VERSION):
+        print("✅ 已是最新版本，无需更新。")
+        return 0
+    print(f"发现新版本 {VERSION} → {latest}，正在升级 …")
+    if subprocess.run(["brew", "upgrade", "ohmyangboy/tap/paper"]).returncode == 0:
+        print("✅ 已升级到最新版本。")
+        return 0
+    return _error("brew upgrade 失败，请手动运行：brew upgrade ohmyangboy/tap/paper", 1)
+
+
 def cmd_uninstall(clean: bool) -> int:
     print("Paper 程序由 Homebrew 管理，请使用：brew uninstall paper")
     if clean:
@@ -1385,6 +1438,7 @@ def make_parser() -> argparse.ArgumentParser:
     config_sub.add_parser("test", help="Test Git and remote reachability")
     config_sub.add_parser("status", help="Show full config and deployment status")
     commands.add_parser("doctor", help="Check the install and runtime environment")
+    commands.add_parser("update", help="Self-update Paper via Homebrew")
     uninstall = commands.add_parser("uninstall", help="Show uninstall instructions, optionally clean Paper data")
     uninstall.add_argument("--clean", action="store_true")
     return parser
@@ -1457,6 +1511,7 @@ def _main(argv: list[str] | None = None) -> int:
     if command == "config":
         return cmd_config(config_cmd=getattr(args, "config_cmd", None), home_cmd=getattr(args, "home_cmd", None))
     if command == "doctor": return cmd_doctor()
+    if command == "update": return cmd_update()
     if command == "uninstall": return cmd_uninstall(args.clean)
     make_parser().print_help()
     return 0

@@ -24,6 +24,7 @@ from paper_cli import (
     _open_browser,
     _read_terminal_key,
     _terminal_menu,
+    _version_key,
     _watch_preview,
     _with_spinner,
     cmd_config,
@@ -189,6 +190,39 @@ class PaperCliTests(unittest.TestCase):
                     os.environ.pop("PAPER_HOME", None)
                 else:
                     os.environ["PAPER_HOME"] = old_home
+
+    def test_new_writes_no_frontmatter_title_and_falls_back_to_filename(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            paper_home = Path(root) / ".paper"
+            posts = Path(root) / "notes"
+            os.environ["PAPER_HOME"] = str(paper_home)
+            try:
+                self.assertEqual(main(["link", str(posts)]), 0)
+                self.assertEqual(main(["new", "Hello Paper"]), 0)
+                draft = posts / "hello-paper.md"
+                content = draft.read_text(encoding="utf-8")
+                self.assertNotIn("title:", content)
+                self.assertIn("published: false", content)
+                draft.write_text(
+                    content.replace("published: false", "published: true"),
+                    encoding="utf-8",
+                )
+                self.assertEqual(main(["build"]), 0)
+                index_html = (paper_home / "site" / "out" / "index.html").read_text(encoding="utf-8")
+                self.assertIn('href="/posts/hello-paper/"', index_html)
+                self.assertIn(">hello-paper<", index_html)
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_version_key_orders_stable_above_prerelease(self):
+        self.assertGreater(_version_key("0.1.1"), _version_key("0.1.1-beta.1"))
+        self.assertGreater(_version_key("0.1.1-beta.2"), _version_key("0.1.1-beta.1"))
+        self.assertGreater(_version_key("0.1.1-beta.1"), _version_key("0.1.0"))
+        self.assertEqual(_version_key("0.1.1-beta.1"), _version_key("0.1.1-beta.1"))
 
     def test_publish_keeps_published_state_when_deploy_cannot_run(self):
         with tempfile.TemporaryDirectory() as root:

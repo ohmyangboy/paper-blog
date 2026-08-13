@@ -52,6 +52,67 @@ class PaperCoreTests(unittest.TestCase):
         self.assertIn('loading="lazy"', remote)
         self.assertIn('src="/blog/assets/cover.png"', local)
 
+    def test_markdown_imports_relative_local_image_into_assets(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "photos").mkdir()
+            (posts / "photos" / "a.png").write_bytes(b"\x89PNG fake")
+            rendered = render_markdown("![x](photos/a.png)", posts_dir=posts)
+            self.assertIn('src="/assets/a.png"', rendered)
+            self.assertTrue((posts / "assets" / "a.png").exists())
+
+    def test_markdown_imports_absolute_local_image_into_assets(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root) / "posts"
+            posts.mkdir()
+            outside = Path(root) / "b.png"
+            outside.write_bytes(b"\x89PNG abs")
+            rendered = render_markdown(f"![x]({outside})", posts_dir=posts)
+            self.assertIn('src="/assets/b.png"', rendered)
+            self.assertTrue((posts / "assets" / "b.png").exists())
+
+    def test_markdown_import_dedups_same_name_different_content(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a").mkdir()
+            (posts / "b").mkdir()
+            (posts / "a" / "same.png").write_bytes(b"AAA")
+            (posts / "b" / "same.png").write_bytes(b"BBB")
+            first = render_markdown("![x](a/same.png)", posts_dir=posts)
+            second = render_markdown("![x](b/same.png)", posts_dir=posts)
+            names = sorted(path.name for path in (posts / "assets").iterdir())
+            self.assertEqual(len(names), 2)
+            self.assertIn("same.png", names)
+            self.assertTrue(any(name.startswith("same-") for name in names))
+            self.assertIn('src="/assets/same.png"', first)
+            self.assertIn('src="/assets/same-', second)
+
+    def test_markdown_leaves_remote_data_missing_and_direct_assets_untouched(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            source = (
+                "![web](https://e.test/x.png)\n\n"
+                "![data](data:image/png;base64,AAAA)\n\n"
+                "![missing](../nope.png)\n\n"
+                "![dir](assets/cover.png)"
+            )
+            rendered = render_markdown(source, posts_dir=posts)
+            self.assertIn('src="https://e.test/x.png"', rendered)
+            self.assertIn('src="data:image/png;base64,AAAA"', rendered)
+            self.assertIn('src="../nope.png"', rendered)
+            self.assertIn('src="/assets/cover.png"', rendered)
+            self.assertFalse((posts / "assets").exists())
+
+    def test_markdown_rejects_symlinked_image_import(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            outside = Path(root) / "secret.png"
+            outside.write_bytes(b"secret")
+            (posts / "leak.png").symlink_to(outside)
+            rendered = render_markdown("![x](leak.png)", posts_dir=posts)
+            self.assertIn('src="leak.png"', rendered)
+            self.assertFalse((posts / "assets").exists())
+
     def test_discovery_defaults_to_draft_and_ignores_nested_markdown(self):
         with tempfile.TemporaryDirectory() as root:
             posts_dir = Path(root)
