@@ -24,8 +24,8 @@ Python 是用户可见的唯一 runtime，也是唯一 build graph。Node、npm�
 
 CommonMark 基线 + 表格、删除线、任务列表和 Pygments 代码高亮；raw HTML 默认转义。不把“与 GitHub 完全一致”作为兼容性承诺，也不引入 MDX/React 组件。
 
-## 发布前阻断项
+## 发布状态（v0.1.0）
 
-1. Homebrew Formula 需要真实 GitHub tag、源码 sha256，并安装 `paper_cli.py`、`paper_runtime` 与锁定 Python 依赖。
-2. 删除或隔离历史 Next.js 原型，避免用户误以为存在第二条构建链。
-3. 补齐 `serve`/RSS/sitemap/部署的端到端测试，以及干净 Homebrew 安装 smoke test。
+1. ✅ Homebrew Formula 基于真实 tag（`v0.1.0`）、源码 sha256 与锁定依赖，通过 `ohmyangboy/tap/paper` 分发。
+2. ✅ 历史 Next.js 原型已在发布前删除，仓库只保留 Python 一条构建链。
+3. ⏳ `serve`/RSS/sitemap/部署的端到端测试与干净 Homebrew 安装 smoke test，由 v0.1.0 发布流程的隔离 `PAPER_HOME` 走查覆盖。
