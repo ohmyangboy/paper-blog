@@ -941,6 +941,47 @@ def _git(config: PaperConfig, *args: str, capture: bool = False, timeout: float 
     )
 
 
+def _run_with_spinner(message: str, argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str] | None:
+    """Run a blocking subprocess, animating a loading spinner on a TTY while it works.
+
+    Returns the CompletedProcess, or None if it timed out. On non-TTY output the
+    spinner is skipped (tests and pipes stay deterministic) and the process just
+    runs quietly, captured.
+    """
+    if not (sys.stdout.isatty() and sys.stderr.isatty()):
+        try:
+            return subprocess.run(argv, check=False, text=True, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    stop = threading.Event()
+    result: dict[str, object] = {}
+
+    def _run() -> None:
+        try:
+            result["cp"] = subprocess.run(argv, check=False, text=True, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            result["timeout"] = True
+        finally:
+            stop.set()
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    index = 0
+    label = f"  {message} "
+    while not stop.is_set():
+        sys.stdout.write("\r" + label + frames[index % len(frames)])
+        sys.stdout.flush()
+        index += 1
+        time.sleep(0.08)
+    worker.join()
+    sys.stdout.write("\r" + " " * (len(label) + 1) + "\r")
+    sys.stdout.flush()
+    if "timeout" in result:
+        return None
+    return result.get("cp")  # type: ignore[return-value]
+
+
 def _managed_origin(config: PaperConfig) -> str | None:
     """Return the managed repository's current origin, or None."""
     if not (config.site_dir / ".git").exists():
@@ -989,21 +1030,26 @@ def cmd_deploy() -> int:
         if current_remote.returncode != 0 or current_remote.stdout.strip() != config.git_remote:
             return _error("托管仓库的 origin 与 Paper 配置不一致，请先确认 remote，避免推送到错误仓库。")
     print("  · 暂存并提交站点更新……")
-    if _git(config, "add", "out").returncode != 0:
+    if _git(config, "add", "out", capture=True).returncode != 0:
         return _error("无法暂存静态输出")
-    committed = _git(config, "commit", "-m", "paper: update site", "--allow-empty")
+    committed = _git(config, "commit", "-m", "paper: update site", "--allow-empty", capture=True)
     if committed.returncode != 0:
         return _error("Git commit 失败，请检查 user.name、user.email 或 hooks。")
     print(f"  · 正在推送 gh-pages 到 {config.git_remote} ……")
-    print("    （这一步需要联网上传，首次或网络较慢时可能要等几十秒到几分钟；下方出现 git 传输进度即表示在正常推送）")
-    try:
-        pushed = _git(config, "subtree", "push", "--prefix", "out", "origin", "gh-pages", timeout=600)
-    except subprocess.TimeoutExpired:
+    print("    （这一步需要联网上传，首次或网络较慢时可能要等几十秒到几分钟）")
+    pushed = _run_with_spinner(
+        "正在上传到 GitHub ……",
+        ["git", "-C", str(config.site_dir), "subtree", "push", "--prefix", "out", "origin", "gh-pages"],
+        timeout=600,
+    )
+    if pushed is None:
         print("❌ 推送超时（10 分钟仍未完成）——通常是网络无法稳定连接 GitHub。", file=sys.stderr)
         print("   建议：在配置面板「GitHub 远程 → 测试连接」检查连通性，网络恢复后执行 paper deploy 重试。", file=sys.stderr)
         return 1
     if pushed.returncode != 0:
         print("❌ GitHub Pages 推送失败；本地状态保留，可稍后执行 paper deploy 重试。", file=sys.stderr)
+        if pushed.stderr:
+            print(pushed.stderr.strip(), file=sys.stderr)
         print("   常见原因：网络连不上 GitHub、SSH 密钥 / 个人访问令牌未配置或已失效、仓库地址填错。", file=sys.stderr)
         print("   建议：配置面板「GitHub 远程 → 测试连接」检查连通性，或 ssh -T git@github.com 验证认证。", file=sys.stderr)
         return 1
