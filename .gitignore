@@ -18,5 +18,8 @@ out/
 # Tool state
 .codewhale/
 
+# Spec 文档（本机沉淀，不入 git）
+specs/
+
 # OS
 .DS_Store

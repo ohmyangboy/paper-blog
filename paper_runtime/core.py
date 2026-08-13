@@ -693,6 +693,7 @@ blockquote { border-left: 2px solid var(--primary); padding-left: 1rem; color: v
 .post-title { font-weight: 500; text-decoration: none; }
 .post-item .post-date { font-size: 0.875rem; color: var(--subtext); font-variant-numeric: tabular-nums; margin-left: 1rem; }
 .post-date { font-size: 0.875rem; color: var(--subtext); font-variant-numeric: tabular-nums; }
+.writing-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 footer { margin-top: 4rem; text-align: center; }
 .footer-brand { font-family: Georgia, Cambria, Baskerville, "Times New Roman", serif; font-style: italic; font-size: 0.725rem; letter-spacing: 0.04em; color: var(--text); text-decoration: none; opacity: 0.12; transition: opacity 0.2s ease, color 0.2s ease; }
 .footer-brand:hover { opacity: 0.5; color: var(--primary); }
@@ -822,7 +823,8 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
     _, index_body = parse_frontmatter(index_source)
     temp_parent = Path(tempfile.mkdtemp(prefix="paper-build-", dir=config.site_dir))
     try:
-        listing = ["<main><h2>Writing</h2><div class=\"post-list\">"]
+        rss_href = html.escape(_href(config, "/rss.xml"), quote=True)
+        listing = [f'<main><div class="writing-header"><h2>Writing</h2><a href="{rss_href}" class="footer-brand">RSS</a></div><div class="post-list">']
         for post in posts:
             if not post.published and not include_drafts:
                 continue

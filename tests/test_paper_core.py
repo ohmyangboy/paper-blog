@@ -421,10 +421,25 @@ class PaperCoreTests(unittest.TestCase):
             )
             home = (output / "index.html").read_text(encoding="utf-8")
             self.assertIn('class="footer-brand"', home)
+            self.assertIn('<div class="writing-header"><h2>Writing</h2><a href="/rss.xml" class="footer-brand">RSS</a></div>', home)
+            self.assertIn('class="footer-brand">Paper Blog</a></footer>', home)
             self.assertIn('font-family: Georgia, Cambria, Baskerville', home)
             self.assertIn('rel="icon"', home)
             self.assertIn('data:image/svg+xml', home)
             self.assertIn('/.paper-revision', home)
+
+    def test_writing_rss_link_respects_site_base_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            output = build_site(
+                PaperConfig(
+                    posts_dir=root_path / "posts",
+                    site_dir=root_path / "site",
+                    site_url="https://alice.github.io/blog",
+                )
+            )
+            home = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn('href="/blog/rss.xml" class="footer-brand">RSS</a>', home)
 
     def test_build_rejects_symlinked_assets(self):
         with tempfile.TemporaryDirectory() as root:
