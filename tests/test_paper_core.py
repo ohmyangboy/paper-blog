@@ -88,6 +88,7 @@ class PaperCoreTests(unittest.TestCase):
             self.assertNotIn('height=', width)
             self.assertIn('width="300"', dimensions)
             self.assertIn('height="200"', dimensions)
+            self.assertIn('style="aspect-ratio: 300 / 200"', dimensions)
 
     def test_markdown_shows_placeholder_for_missing_obsidian_image(self):
         with tempfile.TemporaryDirectory() as root:
@@ -106,6 +107,39 @@ class PaperCoreTests(unittest.TestCase):
             (posts / "b" / "same.png").write_bytes(b"B")
             with self.assertRaisesRegex(ValueError, "图片名称不唯一"):
                 render_markdown("![[same.png]]", posts_dir=posts)
+
+    def test_markdown_rejects_ambiguous_root_and_nested_obsidian_image_name(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "nested").mkdir()
+            (posts / "same.png").write_bytes(b"root")
+            (posts / "nested" / "same.png").write_bytes(b"nested")
+            with self.assertRaisesRegex(ValueError, "图片名称不唯一"):
+                render_markdown("![[same.png]]", posts_dir=posts)
+
+    def test_markdown_obsidian_image_cannot_escape_linked_posts_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            outside = root_path / "outside.png"
+            outside.write_bytes(b"private")
+            rendered = render_markdown("![[../outside.png]]", posts_dir=posts)
+            self.assertIn('class="missing-image"', rendered)
+            self.assertFalse((posts / "assets").exists())
+
+    def test_markdown_obsidian_image_cannot_escape_through_symlinked_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            outside = root_path / "outside"
+            posts.mkdir()
+            outside.mkdir()
+            (outside / "private.png").write_bytes(b"private")
+            (posts / "linked").symlink_to(outside, target_is_directory=True)
+            rendered = render_markdown("![[linked/private.png]]", posts_dir=posts)
+            self.assertIn('class="missing-image"', rendered)
+            self.assertFalse((posts / "assets").exists())
 
     def test_markdown_keeps_obsidian_note_and_code_embeds_as_text(self):
         rendered = render_markdown(

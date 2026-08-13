@@ -330,8 +330,10 @@ def _import_local_image(
         return None
     candidate = Path(clean)
     base = posts_dir.resolve()
+    if require_unique_name and candidate.is_absolute():
+        return None
     source = candidate if candidate.is_absolute() else base / candidate
-    if not source.exists() and not candidate.is_absolute() and candidate.parent == Path("."):
+    if require_unique_name and candidate.parent == Path("."):
         matches = [
             path for path in base.rglob(candidate.name)
             if "assets" not in path.relative_to(base).parts
@@ -341,6 +343,18 @@ def _import_local_image(
             raise ValueError(f"Obsidian 图片名称不唯一：{candidate.name}（{locations}）")
         if len(matches) == 1:
             source = matches[0]
+    elif require_unique_name:
+        if ".." in candidate.parts:
+            return None
+        current = base
+        for part in candidate.parts:
+            current = current / part
+            if current.is_symlink():
+                return None
+        try:
+            source.resolve().relative_to(base)
+        except ValueError:
+            return None
     if source.is_symlink():
         return None
     source = source.resolve()
@@ -386,6 +400,9 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
             token.attrSet("width", dimensions.group(1))
             if dimensions.group(2):
                 token.attrSet("height", dimensions.group(2))
+                token.attrSet(
+                    "style", f"aspect-ratio: {dimensions.group(1)} / {dimensions.group(2)}"
+                )
             label = Path(target).name
         alt = Token("text", "", 0)
         alt.content = label

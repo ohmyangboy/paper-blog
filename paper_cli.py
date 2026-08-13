@@ -856,10 +856,10 @@ def _open_editor(path: Path, config: PaperConfig) -> None:
             if any((parent / ".obsidian").is_dir() for parent in resolved.parents):
                 try:
                     subprocess.Popen(["open", "obsidian://open?path=" + quote(str(resolved), safe="")])
+                    return
                 except OSError:
-                    subprocess.Popen(["open", "-a", "Obsidian", str(path)])
-            else:
-                subprocess.Popen(["open", "-a", "Obsidian", str(path)])
+                    pass
+            subprocess.Popen(["open", "-a", "Obsidian", str(path)])
         elif editor in {"typora", "iawriter", "macdown"} and sys.platform == "darwin":
             app_names = {"typora": "Typora", "iawriter": "iA Writer", "macdown": "MacDown"}
             subprocess.Popen(["open", "-a", app_names[editor], str(path)])
