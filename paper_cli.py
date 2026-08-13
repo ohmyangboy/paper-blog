@@ -587,30 +587,19 @@ def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1 for ch in text)
 
 
-def _wizard_tabs(current: int) -> None:
-    """Render the four wizard steps as a boxed tab bar.
-
-    The active step's tab is highlighted (terracotta, bold), completed steps are
-    green with a ✓, upcoming are gray. The highlight moves forward as the user
-    advances, so only the tab bar — not all four steps' text — is ever shown.
-    """
-    width = 14
-    top, mid, bot = "  ", "  ", "  "
+def _wizard_header(current: int) -> None:
+    """Top numbered stepper, Claude-settings style: the four steps as 1 2 3 4
+    with the active number highlighted. Only the active marker moves between
+    steps — the screen is redrawn in place, never appended downward."""
+    parts = []
     for index, name in enumerate(_WIZARD_STEPS, start=1):
         if index < current:
-            color, mark = GREEN, "✓"
+            parts.append(f"{GREEN}✓ {index} {name}{RESET}")
         elif index == current:
-            color, mark = TERRACOTTA + BOLD, "●"
+            parts.append(f"{TERRACOTTA}{BOLD}● {index} {name}{RESET}")
         else:
-            color, mark = GRAY, " "
-        plain = f"{mark} {index}.{name}"
-        inner = plain + " " * max(width - _display_width(plain), 0)
-        top += f"{color}┌{'─' * width}┐{RESET}  "
-        mid += f"{color}│{inner}│{RESET}  "
-        bot += f"{color}└{'─' * width}┘{RESET}  "
-    print(top.rstrip())
-    print(mid.rstrip())
-    print(bot.rstrip())
+            parts.append(f"{GRAY}{index} {name}{RESET}")
+    print("  " + "    ".join(parts))
 
 
 def _wizard_panel(title: str, body: list[tuple[str, str]]) -> None:
@@ -632,6 +621,17 @@ def _wizard_panel(title: str, body: list[tuple[str, str]]) -> None:
     print(f"  {GRAY}└{bar}┘{RESET}")
 
 
+def _wizard_screen(current: int, title: str, body: list[tuple[str, str]]) -> None:
+    """Clear and redraw the wizard for one step: numbered header on top, content
+    panel below. Redrawing (not appending) makes advancing switch the header's
+    active marker and swap the panel in place — the settings-style transition
+    the wizard needs."""
+    _clear_screen()
+    _wizard_header(current)
+    print()
+    _wizard_panel(title, body)
+
+
 def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperConfig | None:
     """Preview, confirm, handle a mismatched origin, save, and bind the managed origin.
 
@@ -649,7 +649,7 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     ]
     if origin and origin != info.ssh_url:
         body.append(("hint", f"⚠️ 当前托管 origin：{origin}（与将要保存的不一致）"))
-    _wizard_panel("核对保存", body)
+    _wizard_screen(3, "核对保存", body)
     if not _confirm_or_skip("\n按 Enter 确认保存 · 按 Space 跳过："):
         print("  ⏭ 已跳过，未修改任何配置。")
         return None
@@ -686,9 +686,10 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     bound it is shown up front and the create-repo step is skipped; pasting a
     new address re-binds through the same confirm/save path.
 
-    Each step prints a compact tracker (``_wizard_stepper``) so the user always
-    sees where they are and what comes next, and slow operations (binding the
-    origin, building the site, pushing gh-pages) show a loading spinner.
+    Each step redraws the screen (``_wizard_screen``): a numbered header on top
+    whose active marker switches in place, and a content panel below that swaps
+    with it — the settings-style transition, never appended downward. Slow
+    operations (binding the origin, building, pushing gh-pages) show a spinner.
     """
 
     if shutil.which("git") is None:
@@ -696,11 +697,9 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         _pause()
         return config
     existing = normalize_git_remote(config.git_remote)
-    print("🧭 GitHub Pages 发布向导（4 步）\n")
 
-    _wizard_tabs(1)
     if existing:
-        _wizard_panel("创建仓库", [
+        _wizard_screen(1, "创建仓库", [
             ("content", f"当前已绑定：{existing.owner}/{existing.repo}"),
             ("hint", "无需新建仓库，直接进入第 2 步粘贴新地址即可换绑。"),
         ])
@@ -711,18 +710,14 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
             if opened
             else "未能自动打开浏览器 —— 请手动打开 https://github.com/new 新建一个仓库。"
         )
-        _wizard_panel("创建仓库", [
+        _wizard_screen(1, "创建仓库", [
             ("hint", open_hint),
             ("hint", "· 仓库名决定博客地址：用户名.github.io → 根路径；其它 → /仓库名 子路径"),
             ("hint", "· 可见性选 Public；已有仓库可跳过本步，直接粘贴地址。"),
         ])
-        if _confirm_or_skip("\n  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）："):
-            print("  ✓ 继续")
-        else:
-            print("  ⏭ 跳过 —— 使用已有仓库，直接进入第 2 步。")
+        _confirm_or_skip("\n  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）：")
 
-    _wizard_tabs(2)
-    _wizard_panel("粘贴地址", [
+    _wizard_screen(2, "粘贴地址", [
         ("hint", "支持三种写法（任选其一）："),
         ("content", "git@github.com:用户名/仓库.git"),
         ("content", "https://github.com/用户名/仓库"),
@@ -738,16 +733,13 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
             _pause()
             continue
         break
-    print(f"  ✓ 已识别：{info.owner}/{info.repo}")
 
-    _wizard_tabs(3)
     result = _confirm_and_save_remote(config, info)
     if result is None:
         return config
     config = result
 
-    _wizard_tabs(4)
-    _wizard_panel("发布开启", [
+    _wizard_screen(4, "发布开启", [
         ("hint", "gh-pages 分支要等你发布之后才存在，所以顺序是：先发布，再开启 Pages。"),
     ])
     if _confirm_or_skip("\n  现在发布并推送 gh-pages 吗？按 Enter 发布 · 按 Space 跳过："):
