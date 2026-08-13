@@ -34,6 +34,16 @@ jobs:
           PAPER_HOME: ${{ runner.temp }}/paper
         run: |
           python paper.py link "$GITHUB_WORKSPACE/posts"
+          python - <<'PY'
+          import os
+          from paper_runtime.core import load_config, normalize_git_remote, save_config
+
+          config = load_config()
+          remote = normalize_git_remote(os.environ["GITHUB_REPOSITORY"])
+          if remote is None:
+              raise RuntimeError("无法从 GITHUB_REPOSITORY 推导 Pages 地址")
+          save_config(config, git_remote=remote.ssh_url)
+          PY
           python paper.py build
           mkdir -p out
           cp -R "$PAPER_HOME/site/out/." out/
