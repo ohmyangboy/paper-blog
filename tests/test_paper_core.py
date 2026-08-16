@@ -72,6 +72,17 @@ class PaperCoreTests(unittest.TestCase):
         rendered = render_markdown(source)
         self.assertEqual(rendered.count('class="markdown-blank-line"'), 3)
 
+    def test_markdown_preserves_blank_lines_after_lists_and_blocks(self):
+        list_source = "- PaperRss\n- PaperBlog\n\n我还有好多想法"
+        rendered = render_markdown(list_source)
+        self.assertEqual(rendered.count('class="markdown-blank-line"'), 1)
+        self.assertIn("</ul>\n<div class=\"markdown-blank-line\" aria-hidden=\"true\"></div>\n<p>我还有好多想法</p>", rendered)
+
+        multiple_blanks = "- PaperRss\n- PaperBlog\n\n\n\n我还有好多想法"
+        rendered_multi = render_markdown(multiple_blanks)
+        self.assertEqual(rendered_multi.count('class="markdown-blank-line"'), 2)
+
+
     def test_markdown_images_avoid_hotlink_referrer_and_rewrite_local_assets(self):
         remote = render_markdown("![avatar](https://cdn.example.test/avatar.png)")
         local = render_markdown("![cover](assets/cover.png)", asset_base="/blog/assets/")

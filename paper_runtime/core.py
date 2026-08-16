@@ -308,9 +308,14 @@ def _preserve_top_level_blank_lines(state: Any) -> None:
         for index, token in enumerate(state.tokens)
         if token.level == 0 and token.map is not None and token.nesting != -1
     ]
+    lines = state.src.splitlines()
     inserts: list[tuple[int, list[Any]]] = []
-    for (_previous_index, previous), (current_index, current) in zip(blocks, blocks[1:]):
-        blank_lines = max(0, current.map[0] - previous.map[1])
+    for (_previous_index, _previous), (current_index, current) in zip(blocks, blocks[1:]):
+        idx = current.map[0] - 1
+        blank_lines = 0
+        while idx >= 0 and not lines[idx].strip():
+            blank_lines += 1
+            idx -= 1
         spacers = []
         for _ in range(min(blank_lines, 2)):
             spacer = Token("html_block", "", 0)

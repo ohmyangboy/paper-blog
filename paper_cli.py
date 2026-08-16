@@ -47,7 +47,7 @@ from paper_runtime.core import (
     set_post_published,
 )
 
-VERSION = "0.1.1"
+VERSION = "0.1.2-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
