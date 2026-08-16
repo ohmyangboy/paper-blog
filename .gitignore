@@ -3,25 +3,43 @@ __pycache__/
 *.py[cod]
 build/
 *.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# 遗留构建产物 / 历史 Next.js 原型生成的目录（不进 git）
+# Node / Web
 node_modules/
 .next/
 dist/
 next-env.d.ts
 *.tsbuildinfo
 
-# GitHub Pages 构建产物（deploy.yml 生成）
+# Build Outputs
 out/
 
-# Paper user-local config (absolute local paths, migrated to ~/.paper)
+# Local & Tool Configs
 .paper-config.json
-
-# Tool state
 .codewhale/
+.claude/
+.scratch/
 
-# Spec 文档（本机沉淀，不入 git）
+# Environment & Secrets
+.env
+.env.local
+*.env
+
+# Specs (Local)
 specs/
 
-# OS
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
+Thumbs.db
