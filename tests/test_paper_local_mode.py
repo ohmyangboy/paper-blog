@@ -133,5 +133,18 @@ class PaperLocalModeTests(unittest.TestCase):
         self.assertEqual(args3.command, "build")
 
 
+    def test_cli_init_local_mode(self):
+        project_dir = Path(self.temp_dir) / "init_workspace"
+        project_dir.mkdir()
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = _main(["init", "-C", str(project_dir)])
+        self.assertEqual(code, 0)
+        self.assertTrue((project_dir / "posts" / "index.md").exists())
+        self.assertTrue((project_dir / "posts" / "hello-paper.md").exists())
+        self.assertTrue((project_dir / "out" / "index.html").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -49,7 +49,7 @@ from paper_runtime.core import (
     set_post_published,
 )
 
-VERSION = "0.1.2-beta.1"
+VERSION = "0.1.2-beta.2"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -904,9 +904,213 @@ def cmd_link(path_arg: str | None) -> int:
     return 0
 
 
-def cmd_init() -> int:
-    DEFAULT_POSTS_DIR.mkdir(parents=True, exist_ok=True)
-    return cmd_link(str(DEFAULT_POSTS_DIR))
+def _seed_initial_posts(posts_dir: Path, site_name: str = "Paper Blog") -> None:
+    """Create initial index.md and welcome post if directory is empty."""
+    posts_dir.mkdir(parents=True, exist_ok=True)
+    assets_dir = posts_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    today = dt.date.today().isoformat()
+    index_file = posts_dir / "index.md"
+    if not index_file.exists():
+        index_file.write_text(
+            f"---\ntitle: {site_name}\ndate: {today}\npublished: true\n---\n\n"
+            f"# {site_name}\n\n写简单的文字，做干净的博客。\n",
+            encoding="utf-8",
+        )
+
+    has_other_posts = any(p for p in posts_dir.glob("*.md") if p.name != "index.md")
+    if not has_other_posts:
+        welcome_file = posts_dir / "hello-paper.md"
+        if not welcome_file.exists():
+            welcome_file.write_text(
+                f"---\ntitle: 欢迎使用 {site_name}\ndate: {today}\npublished: true\n---\n\n"
+                f"# 欢迎使用 {site_name}\n\n"
+                f"恭喜你！Paper 博客已初始化完成。\n\n"
+                f"- ✍️ **纯粹写作**：Markdown 即一切，无杂质极速阅读。\n"
+                f"- 🎨 **自由排版**：原生支持 Obsidian / Typora 尺寸与对齐语法（如 `![[image.png|300|center]]`）。\n"
+                f"- 🚀 **即时发布**：支持一键发布同步到 GitHub Pages。\n\n"
+                f"你可以在当前文章目录中直接创建或编辑 Markdown 文档，开始你的写作之旅！\n",
+                encoding="utf-8",
+            )
+
+
+def _is_already_initialized(is_local: bool, target_dir: Path | None) -> tuple[bool, PaperConfig | None]:
+    """Check if the target environment (local project or global setup) is already initialized."""
+    if is_local:
+        base = (target_dir or Path.cwd()).resolve()
+        cfg_candidates = [
+            base / ".paper-config.json",
+            base / "paper-config.json",
+            base / "paper.config.json",
+            base / ".paper" / "config.json",
+        ]
+        has_cfg = any(c.is_file() for c in cfg_candidates)
+        has_posts = (base / "posts").is_dir() and any((base / "posts").glob("*.md"))
+        if has_cfg or has_posts:
+            try:
+                cfg = load_local_config(base)
+                return True, cfg
+            except Exception:
+                pass
+        return False, None
+    else:
+        cfg_file = config_path()
+        if cfg_file.is_file():
+            try:
+                cfg = load_config()
+                if cfg.posts_dir.is_dir():
+                    return True, cfg
+            except Exception:
+                pass
+        return False, None
+
+
+def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
+    is_tty = sys.stdin.isatty() and sys.stdout.isatty()
+
+    # 1. 模式判断与选择（若未显式指定 -l 且在交互 TTY 下）
+    mode = "local" if (local or local_dir is not None) else None
+    if mode is None:
+        if is_tty:
+            print(f"\n{TERRACOTTA}{BOLD}📖 欢迎使用 Paper 博客系统初始化向导{RESET}\n")
+            chosen_mode = _terminal_menu(
+                "请选择博客初始化模式：",
+                [
+                    ("global", "global", "全局模式（推荐：随时随地输入 paper 写作，文章存于统一文档库，全局托管）"),
+                    ("local", "local", "当前目录模式（项目工程：基于当前目录生成 .paper-config.json，文章保存在 ./posts）"),
+                ],
+            )
+            if chosen_mode is None:
+                print("已取消初始化。")
+                return 0
+            mode = chosen_mode
+        else:
+            mode = "global"
+
+    is_local = (mode == "local")
+    target_dir = Path(local_dir or ".").resolve() if is_local else None
+
+    # 2. 检查是否已经初始化过
+    already_init, existing_cfg = _is_already_initialized(is_local, target_dir)
+    if already_init and existing_cfg:
+        posts = discover_posts(existing_cfg.posts_dir)
+        print(f"\n💡 检测到该环境已初始化过 Paper：")
+        print(f"  · 模式：{'当前目录模式' if is_local else '全局模式'}")
+        print(f"  · 文章目录：{existing_cfg.posts_dir}（已有 {len(posts)} 篇文章）")
+        print(f"  · 托管目录：{existing_cfg.site_dir}")
+        if existing_cfg.git_remote:
+            print(f"  · Git 远程：{existing_cfg.git_remote}")
+        print(f"  · 静态输出：{'已生成' if existing_cfg.output_dir.exists() else '未生成'}\n")
+
+        if not is_tty:
+            return 0
+
+        action = _terminal_menu(
+            "请选择接下来的操作：",
+            [
+                ("serve", "serve", "🚀 启动本地热更新预览（paper serve）"),
+                ("new", "new", "📝 新建文章草稿并在编辑器打开（paper new）"),
+                ("reinit", "reinit", "🔄 重新运行初始化向导（更新配置与关联）"),
+                ("exit", "exit", "🚪 退出"),
+            ],
+        )
+        if action == "serve":
+            return cmd_serve(8000, local=is_local, local_dir=target_dir)
+        elif action == "new":
+            return cmd_new(None, local=is_local, local_dir=target_dir)
+        elif action in {"exit", None}:
+            print("已退出。")
+            return 0
+        # 选择 reinit 则继续向下执行向导重设
+
+    # 3. 确定配置与文章目录
+    if is_local:
+        config = load_local_config(target_dir or ".")
+        posts_dir = config.posts_dir
+        print(f"\n📁 【当前目录模式】工程目录：{config.site_dir}")
+        print(f"📁 文章存放目录：{posts_dir}")
+    else:
+        try:
+            config = load_config()
+        except ConfigError:
+            config = _default_config()
+
+        default_dir_str = str(config.posts_dir or DEFAULT_POSTS_DIR)
+        if is_tty:
+            ans = _prompt(f"\n📁 请确认文章保存路径 [默认: {default_dir_str}]（直接 Enter 确认）：")
+            posts_dir = Path(ans).expanduser().resolve() if ans else Path(default_dir_str).expanduser().resolve()
+        else:
+            posts_dir = Path(default_dir_str).expanduser().resolve()
+        config = save_config(config, posts_dir=posts_dir)
+
+    # 4. 初始文章脚手架
+    _seed_initial_posts(posts_dir, site_name=config.site_name)
+    print(f"✅ 文章库已就绪：{posts_dir}")
+
+    # 5. 编辑器偏好设置（交互模式）
+    if is_tty:
+        editor_choice = _terminal_menu(
+            f"✍️ 请选择常用写作编辑器（当前: {config.editor}）：",
+            [
+                ("obsidian", "obsidian", "Obsidian"),
+                ("typora", "typora", "Typora"),
+                ("vscode", "vscode", "Visual Studio Code"),
+                ("cursor", "cursor", "Cursor"),
+                ("default", "default", "系统默认 Markdown 应用"),
+            ],
+        )
+        if editor_choice:
+            config = save_config(config, editor=editor_choice)
+
+    # 6. GitHub 关联引导
+    if is_local and config.git_remote:
+        print(f"🔗 已自动关联 Git 远程仓库：{config.git_remote}")
+        info = normalize_git_remote(config.git_remote)
+        if info:
+            print(f"🌐 站点 Pages 地址：{info.pages_url}")
+    elif is_tty:
+        remote_prompt = "🔗 配置 GitHub 远程仓库（例如 git@github.com:username/blog.git，直接 Enter 跳过）："
+        ans_remote = _prompt(remote_prompt)
+        if ans_remote:
+            info = normalize_git_remote(ans_remote)
+            if info:
+                config = save_config(config, git_remote=info.ssh_url)
+                print(f"✅ 已关联远程仓库：{info.ssh_url}")
+                print(f"🌐 站点 Pages 地址：{info.pages_url}")
+                _bind_managed_origin(config, info.ssh_url)
+            else:
+                print("⚠️ 仓库地址格式无法识别，已跳过关联，后续可在设置中随时配置。")
+
+    # 7. 首次静态构建
+    try:
+        _with_spinner("正在进行首次站点构建 ……", build_site, config)
+        print(f"✅ 站点初始构建完成！产物输出目录：{config.output_dir}")
+    except Exception as exc:
+        print(f"⚠️ 初始构建提示：{exc}")
+
+    # 8. 完成向导与后续行动
+    if is_tty:
+        next_action = _terminal_menu(
+            "\n🎉 Paper 初始化全部就绪！请选择接下来的操作：",
+            [
+                ("serve", "serve", "🚀 启动本地热更新预览（在浏览器查看博客效果）"),
+                ("publish", "publish", "🌐 立即同步发布到 GitHub Pages"),
+                ("exit", "exit", "🚪 完成并退出"),
+            ],
+        )
+        if next_action == "serve":
+            return cmd_serve(8000, local=is_local, local_dir=target_dir)
+        elif next_action == "publish":
+            return cmd_publish(False, [], local=is_local, local_dir=target_dir)
+
+    print("\n💡 常用命令指引：")
+    cmd_prefix = f"paper -l" if is_local else "paper"
+    print(f"  · {cmd_prefix} new \"文章标题\"   新建草稿并在编辑器中打开")
+    print(f"  · {cmd_prefix} serve            启动本地热更新预览")
+    print(f"  · {cmd_prefix} publish          勾选草稿并发布上线")
+    print(f"  · {cmd_prefix}                  打开交互控制台面板\n")
+    return 0
 
 
 def _slug(title: str) -> str:
@@ -1757,7 +1961,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not command and sys.stdin.isatty():
         return run_dashboard(_startup_update_notice(), local=local, local_dir=dir_path)
 
-    if command == "init": return cmd_init()
+    if command == "init": return cmd_init(local=local, local_dir=dir_path)
     if command == "link": return cmd_link(args.path)
     if command == "new": return cmd_new(args.title, local=local, local_dir=dir_path)
     if command in {"list", "posts"}: return cmd_list(local=local, local_dir=dir_path)
