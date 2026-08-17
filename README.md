@@ -4,12 +4,13 @@
   <h1>Paper</h1>
 
   <p><strong>写简单的文字，做干净的博客。</strong></p>
-  <p>从 Markdown 写作到 GitHub Pages 上线，一条 创作的极简路径。</p>
+  <p>从 Markdown 写作到 GitHub Pages 上线，一条专为创作者设计的极简路径。</p>
 
   <p>
     <a href="https://ohmyangboy.github.io/paper-blog/">官方网站</a> ·
-    <a href="#安装">安装</a> ·
-    <a href="#快速开始">快速开始</a> ·
+    <a href="#-安装">安装指南</a> ·
+    <a href="#-快速开始">快速开始</a> ·
+    <a href="#-全局模式与局部项目模式">运行模式</a> ·
     <a href="https://github.com/ohmyangboy/paper-blog/issues">问题反馈</a>
   </p>
 
@@ -25,161 +26,192 @@
 
 ## 软件简介
 
-Paper 是一个 macOS 优先的 Markdown 静态站点生成器与写作 CLI。它把新建草稿、本地预览、文章发布和 GitHub Pages 部署收进同一个终端工作流，让个人博客把注意力留给文字，而不是构建工具。
+Paper 是一个 macOS 优先的 Markdown 静态站点生成器与写作 CLI。它把新建草稿、本地预览、文章发布和 GitHub Pages 部署收进同一个终端工作流，让个人博客把注意力留给文字，而不是复杂的构建配置。
 
-正式运行时只有 Python。普通用户通过 Homebrew 一次安装，不需要 Node、npm，也不需要手动修复 pip 依赖。
+正式运行时基于 Python。普通用户通过 Homebrew 一次安装，不需要 Node、npm，也不需要手动配置 pip 依赖。
+
+---
 
 ## 核心亮点
 
-- **写作到上线**：`paper new`、`paper serve`、`paper publish` 串起完整写作流程。
-- **方向键控制台**：直接运行 `paper` 即可管理首页、草稿与已发布文章；首页固定在第一项，文章按修改时间排序，并用 🟢 / ⚪ 标明状态。
-- **本地热更新预览**：自动打开浏览器，监听 Markdown 与资源变更；草稿不会进入生产构建。
-- **GitHub Pages 发布**：配置一次仓库后构建并推送 `gh-pages`，保留失败后的重试与状态检查。
-- **Obsidian 友好**：支持常用图片嵌入语法，并可把 vault 内文章交给 Obsidian 打开。
-- **完整订阅输出**：生成 RSS 2.0 与 sitemap；RSS 含完整正文、绝对链接、作者与站点图标。
-- **原稿安全边界**：Paper 管理配置和静态输出，不会在卸载时删除关联的 Markdown 原稿。
-- **启动更新提醒**：进入 Paper 控制台前会轻量检查 Release；发现新版本时提示运行 `paper update`，检查失败不会阻塞写作。
+- **全流程打通**：`paper new` $\rightarrow$ `paper serve` $\rightarrow$ `paper publish` 一气呵成。
+- **方向键控制台**：直接输入 `paper` 唤出 TUI 控制台，首页置顶，草稿与已发布用 🟢 / ⚪ 清晰区分。
+- **双运行模式**：支持随时随地写作的**全局模式**，也支持独立仓库管理的**项目目录模式（`-l`）**。
+- **本地热更新预览**：内置极轻量 HTTP 服务，监听文件变更自动刷新；草稿不会意外流出到生产构建。
+- **GitHub Pages 自动化**：配置一次仓库即可全自动构建并推送 `gh-pages` 分支。
+- **Obsidian 深度兼容**：支持 `![[image.png]]` 等图片语法，可一键唤醒 Obsidian 原生应用编辑。
+- **完整订阅与 SEO**：自动生成包含全文与作者信息的 RSS 2.0 订阅源与 sitemap.xml。
+- **原稿安全保证**：Paper 仅管理静态输出与部署，无论升级或卸载均**绝不触碰**你的 Markdown 原稿。
 
-## 安装
+---
 
-要求：macOS、Homebrew。
+## 📦 安装
+
+### 推荐方式：Homebrew 安装
+
+> 💡 **新 Mac 用户提示**：如果终端提示 `command not found: brew`，请先粘贴运行官方安装脚本：  
+> `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+
+拥有 Homebrew 后，直接运行：
 
 ```sh
 brew install ohmyangboy/tap/paper
 ```
 
-安装完成后检查环境：
+安装完成后验证环境：
 
 ```sh
 paper --version
 paper doctor
 ```
 
-Homebrew 安装的版本可直接自更新：
+后续升级直接运行：
 
 ```sh
 paper update
 ```
 
-## 快速开始
-
-关联已有 Markdown 目录：
-
-```sh
-paper link ~/Documents/Notes
-```
-
-或者创建标准文章目录：
-
-```sh
-paper init
-```
-
-然后开始写作：
-
-```sh
-paper new "Hello Paper"
-paper serve
-paper publish
-```
-
-直接运行 `paper` 会进入方向键控制台；支持 `↑/↓`、`j/k`、数字键和 Enter。首页按一次 Esc/Q 会显示退出确认，再按一次才退出；Ctrl+C 会安静退出并恢复终端屏幕。
-
-## 常用命令
-
-| 命令 | 作用 |
-| --- | --- |
-| `paper` | 打开交互式文章控制台 |
-| `paper new "标题"` | 新建草稿并交给默认编辑器打开 |
-| `paper list` | 查看首页、草稿与已发布文章 |
-| `paper serve` | 启动仅绑定 `127.0.0.1` 的热更新预览 |
-| `paper publish` | 发布草稿、重新构建并同步 GitHub Pages；修改已发布文章后直接用它更新线上 |
-| `paper build` | 生成生产静态站点（不联网，供检查输出 / CI 使用） |
-| `paper deploy` | 把当前 `out/` 推送到 GitHub Pages（发布失败后的重试入口） |
-| `paper status` | 查看站点与发布状态 |
-| `paper config` | 设置目录、编辑器、仓库、颜色与 favicon |
-| `paper update` | 通过 Homebrew 升级 Paper |
-
-## 写作格式
-
-Paper 只扫描关联目录顶层的 Markdown 文件。没有 `published: true` 的文章默认为草稿；展示标题默认取文件名，只有显式写入 `title` 才会覆盖。
-
-```md
----
-title: Hello Paper
-date: 2026-08-13
-published: true
-description: 第一篇 Paper 文章
----
-
-# Hello Paper
-
-从这里开始写。
-```
-
-Paper 以 `markdown-it-py` 的 CommonMark 为基线，并支持表格、删除线、任务列表、代码高亮和单回车换行。原始 HTML 默认转义，不支持 MDX。
-
-### 图片与 Obsidian
-
-推荐把本地图片放在文章目录的 `assets/` 中：
-
-```md
-![说明](assets/image.png)
-```
-
-也可以引用其他相对路径或绝对路径；构建时 Paper 会把实际用到的本地图片复制进发布资源，不修改原图，也不会保留已经从正文移除的旧发布副本。
-
-兼容的 Obsidian 图片语法包括：
-
-```md
-![[image.png]]
-![[image.png|说明]]
-![[image.png|300]]
-![[image.png|300x200]]
-```
-
-只有文件名时会递归查找关联的文章目录，并要求文件名唯一。Paper 不展开 `![[笔记]]`，也不搜索关联目录之外的附件。
-
-图片压缩默认开启，只处理构建/预览输出副本。可通过 `paper config compress on|off` 切换。
-
-## 品牌与站点配置
-
-`paper config` 可设置：
-
-- GitHub remote 与 Pages 地址
-- 文章目录与默认编辑器
-- 主题高亮颜色
-- favicon：默认使用 Paper zine 官方图标，也支持本地图片、SVG、Data URI 或图片 URL
-- 图片压缩
-
-RSS 2.0 同时提供标准 `description` 与 `content:encoded` 完整正文。站内链接和图片会转换为绝对 URL；频道与文章作者默认从 GitHub remote 推断，并写入 `dc:creator`。订阅源标题显示为 `Paper Blog @用户名`，配置了公开 favicon 时也会输出频道图片。
-
-## 数据边界
-
-- 用户原稿：由 `paper link` 关联，卸载 Paper 时不会删除。
-- 配置：`~/.paper/config.json`。
-- 更新检查缓存：`~/.paper/update-check.json`，仅保存检查时间与公开 Release 版本号。
-- 静态托管目录：`~/.paper/site`。
-- Homebrew 安装包：由 Homebrew 私有 Python 环境管理。
-
-## 从源码开发
+<details>
+<summary>源码与开发环境安装（点击展开）</summary>
 
 要求：Python 3.11+。
 
 ```sh
 git clone https://github.com/ohmyangboy/paper-blog.git
 cd paper-blog
-python3 -m pip install -e .
-python3 paper.py --version
-python3 -m unittest discover -s tests -v
+pip install -e .
+paper --version
+```
+</details>
+
+---
+
+## 🚀 快速开始（3 分钟从 0 到上线）
+
+### 第 1 步：初始化博客
+
+```sh
+paper init
 ```
 
-Python CLI 与静态构建链是唯一正式运行时；发布版不依赖历史 Next.js 原型。
+*CLI 会弹出交互菜单引导你选择初始化方式：*
+1. **全局模式（推荐）**：统一保存在个人文档库中，随时随地在任何终端目录输入 `paper` 即可写作。
+2. **当前目录模式（Local）**：在当前文件夹生成 `.paper-config.json` 与 `./posts`，适合独立 Git 仓库管理。
 
-## 官方图标
+*(如果你已有 Markdown 笔记库，也可以直接运行 `paper link ~/Documents/MyNotes` 进行关联)*
 
-Paper Blog 官方图标采用暖白纸张、黑色网点印刷、从大 P 内窗翻出的纸页与红色套准标记，视觉语言参考了 [GC Minimal Zine Poster](https://github.com/LiamGvchi/gc-minimal-zine-poster) 的诗性纸感留白体系，并为 Paper 的“写作 → 发布”关系重新设计；它不沿用 Paper RSS 的撕裂字母图形。
+---
 
-## 开源协议
+### 第 2 步：写下第一篇草稿并本地预览
+
+```sh
+# 新建文章（会自动打开你的默认编辑器）
+paper new "我的第一篇博客"
+
+# 启动本地热更新预览（浏览器自动打开）
+paper serve
+```
+
+---
+
+### 第 3 步：一键上线到 GitHub Pages
+
+```sh
+# 首次配置远程仓库（按终端提示输入用户名/仓库名即可）
+paper config remote
+
+# 审核并发布（自动编译生成静态站点并推送到 GitHub Pages）
+paper publish
+```
+
+---
+
+## 🧭 全局模式与局部项目模式
+
+Paper 原生支持两种使用习惯，满足不同场景：
+
+| 模式 | 适用场景 | 常用命令 | 配置文件位置 |
+| :--- | :--- | :--- | :--- |
+| **全局模式**（默认） | 个人博客、日常随手记录，希望在任何终端路径都能直接敲 `paper` 写作。 | `paper` / `paper new` / `paper serve` | `~/.paper/config.json` |
+| **局部项目模式**（Local） | 博客本身是一个独立 Git 仓库，希望配置和文章完全随项目代码归档。 | `paper -l` / `paper -l serve` / `paper -C ./my-blog` | `./.paper-config.json` |
+
+* **切换到局部模式**：在命令后加上 `-l` 或 `--local`，例如 `paper -l serve`。
+* **指定目录执行**：使用 `-C <路径>`，例如 `paper -C ~/Work/blog publish`。
+
+---
+
+## 🛠️ 常用命令速查表
+
+| 命令 | 作用 |
+| --- | --- |
+| `paper` | 打开交互式 TUI 文章控制台（方向键导航） |
+| `paper new [标题]` | 新建草稿，并自动唤醒编辑器打开 |
+| `paper serve` | 启动本地热更新预览服务（默认端口 8000） |
+| `paper publish [slug]` | 发布指定草稿或更新已发布文章，并自动同步 GitHub Pages |
+| `paper list` | 终端列出所有文章状态（🟢 已上线 / ⚪ 草稿） |
+| `paper build` | 仅生成生产环境静态文件到 `out/` 目录（供 CI 或离线检查） |
+| `paper deploy` | 手动把当前静态站点推送到 GitHub Pages（发布重试入口） |
+| `paper config` | 进入交互式站点与外观设置控制台 |
+| `paper config remote` | 快速配置或修改 GitHub 仓库与自定义域名 |
+| `paper config editor` | 快捷配置默认编辑器（VS Code / Obsidian / Typora / 系统默认等） |
+| `paper doctor` | 检查当前 Python 运行时、Git 及网络配置状态 |
+| `paper update` | 一键检查并自更新 Paper 到最新版本 |
+| `paper uninstall` | 显示卸载指南（加 `--clean` 可彻底清理配置缓存，不删原稿） |
+
+---
+
+## ✍️ 写作与 Markdown 规范
+
+Paper 扫描文章目录顶层的 `.md` 文件。未标记 `published: true` 的文章默认为草稿，草稿在本地 `paper serve` 中可见，但不会进入生产发布。
+
+```md
+---
+title: 自定义标题（可选，默认直接取文件名）
+date: 2026-08-17
+published: true
+description: 这是一篇关于 Paper 的极简介绍
+---
+
+# 从这里开始写作
+
+单回车直接换行，空行用于分段。
+```
+
+### 本地图片与 Obsidian 语法支持
+
+推荐将图片放在文章目录的 `assets/` 下：
+```md
+![图片说明](assets/cover.png)
+```
+
+**完全兼容 Obsidian 图片内嵌语法**：
+```md
+![[image.png]]
+![[image.png|图片说明]]
+![[image.png|400]]
+![[image.png|400x300]]
+```
+*构建时 Paper 会自动扫描关联目录，将正文引用的有效图片打包复制到输出资源中，并支持无损图片压缩。*
+
+---
+
+## 🎨 站点外观与品牌定制
+
+输入 `paper config` 可随时自定义：
+- **主题高亮色**：修改网站强调色（默认温润纸质橙 `#D97757`）。
+- **网站图标（Favicon）**：支持使用 Paper 经典 zine 图标、自定义本地 PNG/SVG/ICO、或直接粘贴图标代码。
+- **自定义域名与 Pages 路径**：支持形如 `https://username.github.io/repo` 或自定义独立域名 `https://blog.yourdomain.com`。
+
+---
+
+## 🔒 原稿安全与数据存储
+
+- **用户原稿**：归属权始终在用户手中。即使彻底卸载 Paper，**也绝不会删除你的 Markdown 笔记原稿**。
+- **全局配置与缓存**：存储于 `~/.paper/`（含静态发布目录与更新检查缓存）。
+- **局部模式配置**：存储于项目根目录下的 `.paper-config.json`。
+
+---
+
+## 📄 开源协议
 
 Paper 基于 [GNU General Public License v3.0](LICENSE) 开源。
