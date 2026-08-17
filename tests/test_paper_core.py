@@ -123,6 +123,39 @@ class PaperCoreTests(unittest.TestCase):
             self.assertIn('height="200"', dimensions)
             self.assertIn('style="aspect-ratio: 300 / 200"', dimensions)
 
+    def test_markdown_supports_image_alignment(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "photo.png").write_bytes(b"\x89PNG align")
+
+            # Obsidian alignment
+            obs_left = render_markdown("![[photo.png|left]]", posts_dir=posts)
+            obs_right = render_markdown("![[photo.png|right]]", posts_dir=posts)
+            obs_combo1 = render_markdown("![[photo.png|200|left]]", posts_dir=posts)
+            obs_combo2 = render_markdown("![[photo.png|right|300x200]]", posts_dir=posts)
+
+            self.assertIn('data-align="left"', obs_left)
+            self.assertIn('class="align-left"', obs_left)
+            self.assertIn('data-align="right"', obs_right)
+            self.assertIn('class="align-right"', obs_right)
+            self.assertIn('width="200"', obs_combo1)
+            self.assertIn('data-align="left"', obs_combo1)
+            self.assertIn('width="300"', obs_combo2)
+            self.assertIn('height="200"', obs_combo2)
+            self.assertIn('data-align="right"', obs_combo2)
+
+            # Standard markdown / Typora URL hash alignment
+            std_left = render_markdown("![pic](photo.png#left)", posts_dir=posts)
+            std_right = render_markdown("![pic](photo.png#align-right)", posts_dir=posts)
+            std_center = render_markdown("![pic](photo.png#center)", posts_dir=posts)
+
+            self.assertIn('data-align="left"', std_left)
+            self.assertIn('class="align-left"', std_left)
+            self.assertIn('data-align="right"', std_right)
+            self.assertIn('class="align-right"', std_right)
+            self.assertIn('data-align="center"', std_center)
+            self.assertIn('class="align-center"', std_center)
+
     def test_markdown_shows_placeholder_for_missing_obsidian_image(self):
         with tempfile.TemporaryDirectory() as root:
             rendered = render_markdown("前文\n\n![[missing image.png]]\n\n后文", posts_dir=Path(root))

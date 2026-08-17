@@ -433,7 +433,7 @@ class PaperCliTests(unittest.TestCase):
                 else:
                     os.environ["PAPER_HOME"] = old_home
 
-    def test_publish_no_drafts_in_tty_reports_cleanly(self):
+    def test_publish_without_drafts_still_builds_and_deploys(self):
         with tempfile.TemporaryDirectory() as root:
             old_home = os.environ.get("PAPER_HOME")
             root_path = Path(root)
@@ -445,18 +445,19 @@ class PaperCliTests(unittest.TestCase):
                     "sys.stdin.isatty", return_value=True
                 ), mock.patch("sys.stdout.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_multiselect", return_value=[]
-                ) as multiselect:
+                ) as multiselect, mock.patch("paper_cli.cmd_deploy", return_value=0) as deploy:
                     code = main(["publish"])
                 self.assertEqual(code, 0)
-                self.assertIn("没有待发布的草稿", output.getvalue())
+                self.assertIn("没有需要首次发布的草稿", output.getvalue())
                 multiselect.assert_not_called()
+                deploy.assert_called_once()
             finally:
                 if old_home is None:
                     os.environ.pop("PAPER_HOME", None)
                 else:
                     os.environ["PAPER_HOME"] = old_home
 
-    def test_publish_empty_selection_reports_skip_and_keeps_draft(self):
+    def test_publish_empty_selection_syncs_site_and_keeps_draft(self):
         with tempfile.TemporaryDirectory() as root:
             old_home = os.environ.get("PAPER_HOME")
             root_path = Path(root)
@@ -473,11 +474,241 @@ class PaperCliTests(unittest.TestCase):
                     "sys.stdin.isatty", return_value=True
                 ), mock.patch("sys.stdout.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_multiselect", return_value=[]
-                ):
+                ), mock.patch("paper_cli.cmd_deploy", return_value=0) as deploy:
                     code = main(["publish"])
                 self.assertEqual(code, 0)
-                self.assertIn("未勾选任何草稿", output.getvalue())
+                self.assertIn("没有需要首次发布的草稿", output.getvalue())
                 self.assertIn("published: false", draft.read_text(encoding="utf-8"))
+                deploy.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_publish_published_slug_rebuilds_without_touching_frontmatter(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                live = root_path / "notes" / "live.md"
+                live.write_text(
+                    "---\ntitle: Live\npublished: true\n---\n\nOld body\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(main(["build"]), 0)
+                live.write_text(
+                    "---\ntitle: Live\npublished: true\n---\n\nNew body\n",
+                    encoding="utf-8",
+                )
+                with mock.patch("paper_cli.cmd_deploy", return_value=0) as deploy:
+                    code = main(["publish", "live"])
+                self.assertEqual(code, 0)
+                self.assertIn("published: true", live.read_text(encoding="utf-8"))
+                rendered = (
+                    root_path / ".paper" / "site" / "out" / "posts" / "live" / "index.html"
+                ).read_text(encoding="utf-8")
+                self.assertIn("New body", rendered)
+                self.assertNotIn("Old body", rendered)
+                deploy.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_publish_slug_draft_sets_published_true(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                draft = root_path / "notes" / "draft.md"
+                draft.write_text(
+                    "---\ntitle: Draft\npublished: false\n---\n\nBody\n",
+                    encoding="utf-8",
+                )
+                with mock.patch("paper_cli.cmd_deploy", return_value=0):
+                    code = main(["publish", "draft"])
+                self.assertEqual(code, 0)
+                self.assertIn("published: true", draft.read_text(encoding="utf-8"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_publish_all_without_drafts_still_syncs(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                (root_path / "notes" / "live.md").write_text(
+                    "---\ntitle: Live\npublished: true\n---\n\nBody\n",
+                    encoding="utf-8",
+                )
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), mock.patch(
+                    "paper_cli.cmd_deploy", return_value=0
+                ) as deploy:
+                    code = main(["publish", "--all"])
+                self.assertEqual(code, 0)
+                self.assertIn("没有需要首次发布的草稿", output.getvalue())
+                deploy.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_publish_build_failure_rolls_back_only_newly_published(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+                draft = root_path / "notes" / "draft.md"
+                draft.write_text(
+                    "---\ntitle: Draft\npublished: false\n---\n\nBody\n",
+                    encoding="utf-8",
+                )
+                live = root_path / "notes" / "live.md"
+                live.write_text(
+                    "---\ntitle: Live\npublished: true\n---\n\nBody\n",
+                    encoding="utf-8",
+                )
+                with mock.patch("paper_cli.build_site", side_effect=RuntimeError("boom")):
+                    code = main(["publish", "draft", "live"])
+                self.assertEqual(code, 1)
+                self.assertIn("published: false", draft.read_text(encoding="utf-8"))
+                self.assertIn("published: true", live.read_text(encoding="utf-8"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def _deploy_env(self, root_path: Path) -> Path:
+        """Set up a linked site with a local managed repo and origin, no network."""
+        self.assertEqual(main(["link", str(root_path / "notes")]), 0)
+        config_path = root_path / ".paper" / "config.json"
+        text = config_path.read_text(encoding="utf-8").replace(
+            '"gitRemote": ""', '"gitRemote": "https://example.invalid/paper.git"'
+        )
+        config_path.write_text(text, encoding="utf-8")
+        site_dir = root_path / ".paper" / "site"
+        _init_with_origin(site_dir, "https://example.invalid/paper.git", gh_pages=True)
+        (root_path / "notes" / "live.md").write_text(
+            "---\ntitle: Live\npublished: true\n---\n\nBody\n",
+            encoding="utf-8",
+        )
+        return site_dir
+
+    @staticmethod
+    def _fake_push_success():
+        return subprocess.CompletedProcess(["git"], 0, "", "")
+
+    def test_deploy_commits_when_diff_and_never_uses_allow_empty(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                site_dir = self._deploy_env(root_path)
+                self.assertEqual(main(["build"]), 0)
+                real_git = paper_cli._git
+                calls: list[tuple[str, ...]] = []
+
+                def spy(config, *args, **kwargs):
+                    calls.append(tuple(args))
+                    return real_git(config, *args, **kwargs)
+
+                with mock.patch("paper_cli._git", side_effect=spy), mock.patch(
+                    "paper_cli._run_with_spinner", return_value=self._fake_push_success()
+                ) as push:
+                    code = main(["deploy"])
+                self.assertEqual(code, 0)
+                log = subprocess.run(
+                    ["git", "-C", str(site_dir), "log", "--oneline", "-1"],
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                self.assertIn("paper: update site", log)
+                self.assertFalse(
+                    any("--allow-empty" in args for args in calls),
+                    f"--allow-empty should never be used, got {calls}",
+                )
+                push.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_deploy_without_diff_skips_commit_but_pushes(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                site_dir = self._deploy_env(root_path)
+                self.assertEqual(main(["build"]), 0)
+                with mock.patch(
+                    "paper_cli._run_with_spinner", return_value=self._fake_push_success()
+                ):
+                    self.assertEqual(main(["deploy"]), 0)
+                count_before = subprocess.run(
+                    ["git", "-C", str(site_dir), "rev-list", "--count", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                with mock.patch(
+                    "paper_cli._run_with_spinner", return_value=self._fake_push_success()
+                ) as push:
+                    code = main(["deploy"])
+                self.assertEqual(code, 0)
+                count_after = subprocess.run(
+                    ["git", "-C", str(site_dir), "rev-list", "--count", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                self.assertEqual(count_before, count_after)
+                push.assert_called_once()
+            finally:
+                if old_home is None:
+                    os.environ.pop("PAPER_HOME", None)
+                else:
+                    os.environ["PAPER_HOME"] = old_home
+
+    def test_rebuild_same_input_produces_no_git_diff(self):
+        with tempfile.TemporaryDirectory() as root:
+            old_home = os.environ.get("PAPER_HOME")
+            root_path = Path(root)
+            os.environ["PAPER_HOME"] = str(root_path / ".paper")
+            try:
+                site_dir = self._deploy_env(root_path)
+                self.assertEqual(main(["build"]), 0)
+                subprocess.run(
+                    ["git", "-C", str(site_dir), "add", "out"], check=True, capture_output=True
+                )
+                subprocess.run(
+                    ["git", "-C", str(site_dir), "commit", "-m", "first build"],
+                    check=True,
+                    capture_output=True,
+                )
+                self.assertEqual(main(["build"]), 0)
+                diff = subprocess.run(
+                    ["git", "-C", str(site_dir), "diff", "HEAD", "--", "out"],
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                self.assertEqual(diff, "")
             finally:
                 if old_home is None:
                     os.environ.pop("PAPER_HOME", None)

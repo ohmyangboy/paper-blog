@@ -37,10 +37,12 @@ from paper_runtime.core import (
     PaperConfig,
     Post,
     _base_path,
+    _has_github_pages_actions,
     build_site,
     config_path,
     discover_posts,
     load_config,
+    load_local_config,
     normalize_git_remote,
     parse_frontmatter,
     save_config,
@@ -256,7 +258,14 @@ def _terminal_menu(
         leave_alt_screen()
 
 
-def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> list[str]:
+def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> list[str] | None:
+    """Pick a subset of options on a TTY.
+
+    Returns the selected keys on Enter (possibly an empty list, meaning
+    "continue without selecting"), or None on Esc/Q/Ctrl+C (meaning "cancel
+    the whole operation"). Off-TTY and empty options return an empty list so
+    callers treat them as "nothing selected, keep going".
+    """
     if not sys.stdin.isatty() or not sys.stdout.isatty() or not options:
         return []
     selected_index = 0
@@ -296,7 +305,7 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
             elif key in {"\r", "\n"}:
                 return [key for key, _label, _description in options if key in checked]
             elif key in {"q", "Q", "\x1b", "\x03"}:
-                return []
+                return None
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
         sys.stdout.write("\033[?25h")
@@ -314,7 +323,14 @@ def _has_config() -> bool:
     return config_path().exists()
 
 
-def _require_linked() -> PaperConfig | None:
+def _require_linked(local: bool = False, local_dir: Path | str | None = None) -> PaperConfig | None:
+    if local or local_dir is not None:
+        target_dir = Path(local_dir or ".").expanduser().resolve()
+        try:
+            return load_local_config(target_dir)
+        except ConfigError as exc:
+            _error(str(exc))
+            return None
     if not _has_config():
         _error("尚未关联 Markdown 目录。请先执行 paper link，或使用 paper init 创建标准目录。")
         return None
@@ -468,11 +484,12 @@ def cmd_config(
     config_cmd: str | None = None,
     home_cmd: str | None = None,
     compress_cmd: str | None = None,
+    local: bool = False,
+    local_dir: Path | str | None = None,
 ) -> int:
-    try:
-        config = load_config(create=True)
-    except ConfigError as exc:
-        return _error(str(exc))
+    config = _require_linked(local=local, local_dir=local_dir)
+    if config is None:
+        return 2
     if config_cmd is not None:
         return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd)
     if not sys.stdin.isatty():
@@ -491,8 +508,9 @@ def cmd_config(
     while True:
         _state, readiness_label = _deployment_readiness(config)
         remote_info = normalize_git_remote(config.git_remote)
+        title_prefix = "⚙️ Paper Config" + (f"（当前目录模式：{Path(local_dir or '.').resolve().name}）" if (local or local_dir is not None) else "")
         action = _terminal_menu(
-            "⚙️ Paper Config",
+            title_prefix,
             [
                 ("home", "home", "高亮颜色 / Favicon 图标"),
                 ("compress", "compress", f"图片压缩 · {'已开启' if config.compress else '已关闭'}"),
@@ -509,14 +527,14 @@ def cmd_config(
             return 0
         if action == "home":
             cmd_brand_config(config)
-            config = load_config(create=True)
+            config = _require_linked(local=local, local_dir=local_dir) or config
         elif action == "compress":
             config = _set_image_compression(config)
         elif action == "editor":
             config = _choose_editor(config)
         elif action == "link":
             cmd_link(None)
-            config = load_config(create=True)
+            config = _require_linked(local=local, local_dir=local_dir) or config
         elif action == "remote":
             config = cmd_remote_entry(config)
         elif action == "pages":
@@ -528,7 +546,7 @@ def cmd_config(
             _pause()
         elif action == "status":
             _clear_screen()
-            cmd_status()
+            cmd_status(local=local, local_dir=local_dir)
             _pause()
 
 
@@ -578,6 +596,8 @@ def _deployment_readiness(config: PaperConfig) -> tuple[str, str]:
     cmd_status with a single short ls-remote probe.
     """
 
+    if _has_github_pages_actions(config.site_dir):
+        return "actions", "GitHub Actions 自动构建"
     if not config.git_remote:
         return "not-configured", "未配置"
     info = normalize_git_remote(config.git_remote)
@@ -614,12 +634,10 @@ def _prompt(message: str) -> str | None:
 
 
 def _confirm_or_skip(message: str) -> bool:
-    """Single-key confirmation: Enter = continue (True), Space/Esc/Q = skip (False).
+    """Single-key confirmation: Enter = continue (True), any other key = cancel/skip (False).
 
-    Shared by every confirm-or-skip prompt in the wizard and the save-confirm
-    step, so the convention is uniform. Reads a raw key on a TTY; falls back to
-    line input off-TTY (Enter / empty line continues, anything else skips) so
-    pipes and tests stay deterministic.
+    Shared by confirm-or-skip prompts across Paper. Reads a raw key on a TTY;
+    falls back to line input off-TTY (Enter / empty line continues, anything else skips).
     """
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         try:
@@ -628,16 +646,10 @@ def _confirm_or_skip(message: str) -> bool:
             return False
     sys.stdout.write(message)
     sys.stdout.flush()
-    while True:
-        key = _read_terminal_key()
-        if key in {"\r", "\n"}:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            return True
-        if key in {" ", "q", "Q", "\x1b", "\x03"}:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            return False
+    key = _read_terminal_key()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return key in {"\r", "\n"}
 
 
 _WIZARD_STEPS = ("创建仓库", "粘贴地址", "核对保存", "发布开启")
@@ -933,8 +945,8 @@ def _open_editor(path: Path, config: PaperConfig) -> None:
         print(f"⚠️ 无法打开编辑器，文章已创建：{exc}")
 
 
-def cmd_new(title: str | None) -> int:
-    config = _require_linked()
+def cmd_new(title: str | None, local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     if not title:
@@ -991,8 +1003,8 @@ def _list_items(config: PaperConfig) -> list[Post]:
     return [homepage, *discover_posts(config.posts_dir)]
 
 
-def cmd_list() -> int:
-    config = _require_linked()
+def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     posts = _list_items(config)
@@ -1013,7 +1025,8 @@ def cmd_list() -> int:
             )
             for post in posts
         ] + [("back", "返回", "返回主菜单")]
-        selected = _terminal_menu("📄 Paper 文章控制台（🟢 已上线　⚪ 草稿或已下线）", options)
+        header = "📄 Paper 文章控制台（🟢 已上线　⚪ 草稿或已下线）" + (f"（当前目录模式：{Path(local_dir or '.').resolve().name}）" if (local or local_dir is not None) else "")
+        selected = _terminal_menu(header, options)
         if selected in {None, "back"}:
             return 0
         post = next((item for item in posts if item.slug == selected), None)
@@ -1044,7 +1057,7 @@ def cmd_list() -> int:
         if action == "edit":
             _open_editor(post.source_path, config)
         elif action == "publish":
-            cmd_publish(False, [post.slug])
+            cmd_publish(False, [post.slug], local=local, local_dir=local_dir)
             _pause()
         elif action == "archive":
             set_post_published(post.source_path, False)
@@ -1068,8 +1081,8 @@ def cmd_list() -> int:
             _pause()
 
 
-def cmd_build(preview: bool = False) -> int:
-    config = _require_linked()
+def cmd_build(preview: bool = False, local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     output = build_site(config, include_drafts=preview)
@@ -1129,8 +1142,8 @@ def _open_browser(url: str) -> bool:
         return False
 
 
-def cmd_serve(port: int) -> int:
-    config = _require_linked()
+def cmd_serve(port: int = 8000, local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     preview_config = replace(config, site_dir=config.site_dir / ".preview")
@@ -1291,12 +1304,49 @@ def _bind_managed_origin(config: PaperConfig, url: str) -> tuple[bool, str | Non
     return True, None
 
 
-def cmd_deploy() -> int:
-    config = _require_linked()
+def cmd_deploy(local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
+    if _has_github_pages_actions(config.site_dir):
+        print("💡 检测到当前仓库已配置 GitHub Actions 自动化部署（.github/workflows/deploy.yml）。")
+        print("   本地静态输出已生成到 ./out。只需将代码变更推送到 GitHub 远程仓库，Actions 会自动构建上线：")
+        print("   git add . && git commit -m \"publish: update posts\" && git push\n")
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return 0
+        confirmed = _confirm_or_skip("🚀 按 Enter 立即执行提交并推送到 GitHub，按其他任意键取消：")
+        if not confirmed:
+            print("已取消自动推送。后续可手动推送更新。")
+            return 0
+        if shutil.which("git") is None:
+            return _error("系统未找到 Git，无法自动推送。")
+        print("  · 暂存本地改动……")
+        if _git(config, "add", ".", capture=True).returncode != 0:
+            return _error("无法暂存本地改动")
+        changed = _git(config, "diff", "--cached", "--quiet")
+        if changed.returncode == 1:
+            print("  · 提交变更……")
+            committed = _git(config, "commit", "-m", "publish: update posts", capture=True)
+            if committed.returncode != 0:
+                return _error("Git commit 失败，请检查 Git 配置或 hooks。")
+        print("  · 正在推送到远程 GitHub 仓库……")
+        pushed = _run_with_spinner(
+            "正在上传到 GitHub ……",
+            ["git", "-C", str(config.site_dir), "push"],
+            timeout=600,
+        )
+        if pushed is None:
+            print("❌ 推送超时（10 分钟仍未完成）——通常是网络无法稳定连接 GitHub。", file=sys.stderr)
+            return 1
+        if pushed.returncode != 0:
+            print("❌ 推送失败；本地提交已保留，可稍后重试。", file=sys.stderr)
+            if pushed.stderr:
+                print(pushed.stderr.strip(), file=sys.stderr)
+            return 1
+        print("✅ 已成功推送到 GitHub；GitHub Actions 正在云端构建并发布，预计数分钟内生效。")
+        return 0
     if not config.git_remote:
-        return _error("尚未配置 GitHub remote。请先在 ~/.paper/config.json 设置 gitRemote。")
+        return _error("尚未配置 GitHub remote。请先在设置中配置 gitRemote。")
     if shutil.which("git") is None:
         return _error("系统未找到 Git，已保留本地静态输出。")
     config.site_dir.mkdir(parents=True, exist_ok=True)
@@ -1309,12 +1359,19 @@ def cmd_deploy() -> int:
         current_remote = _git(config, "remote", "get-url", "origin", capture=True)
         if current_remote.returncode != 0 or current_remote.stdout.strip() != config.git_remote:
             return _error("托管仓库的 origin 与 Paper 配置不一致，请先确认 remote，避免推送到错误仓库。")
-    print("  · 暂存并提交站点更新……")
+    print("  · 暂存并检查站点更新……")
     if _git(config, "add", "out", capture=True).returncode != 0:
         return _error("无法暂存静态输出")
-    committed = _git(config, "commit", "-m", "paper: update site", "--allow-empty", capture=True)
-    if committed.returncode != 0:
-        return _error("Git commit 失败，请检查 user.name、user.email 或 hooks。")
+    changed = _git(config, "diff", "--cached", "--quiet", "--", "out")
+    if changed.returncode == 1:
+        print("  · 提交站点更新……")
+        committed = _git(config, "commit", "-m", "paper: update site", capture=True)
+        if committed.returncode != 0:
+            return _error("Git commit 失败，请检查 user.name、user.email 或 hooks。")
+    elif changed.returncode != 0:
+        return _error("无法检查站点更新（git diff 失败）。")
+    # returncode 0 = 没有新 diff → 不创建空提交；两种情况都继续推送，
+    # 以支持「上次 commit 已生成但 push 失败、本地无新 diff」的重试场景。
     print(f"  · 正在推送 gh-pages 到 {config.git_remote} ……")
     print("    （这一步需要联网上传，首次或网络较慢时可能要等几十秒到几分钟）")
     pushed = _run_with_spinner(
@@ -1337,33 +1394,39 @@ def cmd_deploy() -> int:
     return 0
 
 
-def cmd_publish(all_posts: bool, slugs: list[str]) -> int:
-    config = _require_linked()
+def cmd_publish(all_posts: bool, slugs: list[str], local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
-    drafts = [post for post in discover_posts(config.posts_dir) if not post.published]
+    posts = discover_posts(config.posts_dir)
+    drafts = [post for post in posts if not post.published]
     if not all_posts and not slugs and sys.stdin.isatty() and sys.stdout.isatty():
-        if not drafts:
-            print("没有待发布的草稿。先 paper new 创建文章，之后再发布。")
-            return 0
-        slugs = _terminal_multiselect(
-            "🚀 勾选要发布的草稿：",
-            [(post.slug, post.title, post.date) for post in drafts],
-        )
-        if not slugs:
-            print("未勾选任何草稿，已跳过发布。")
-            return 0
-    wanted = set(slugs)
-    targets = drafts if all_posts else [post for post in drafts if post.slug in wanted]
-    if not targets:
-        if all_posts:
-            return _error("没有待发布的草稿。先 paper new 创建文章。", 1)
-        available = ", ".join(post.slug for post in drafts)
-        if not slugs:
-            return _error("未指定要发布的文章。用 paper publish <slug> 或 paper publish --all 指定。", 1)
-        return _error(f"没有匹配的草稿：{', '.join(slugs)}。可用草稿：{available or '无'}", 1)
-    originals = {post.source_path: post.source_path.read_text(encoding="utf-8") for post in targets}
-    for post in targets:
+        if drafts:
+            chosen = _terminal_multiselect(
+                "🚀 勾选要发布的草稿（不勾选直接 Enter 仅重新构建并同步网站）：",
+                [(post.slug, post.title, post.date) for post in drafts],
+            )
+            if chosen is None:
+                print("已取消发布。")
+                return 0
+            slugs = chosen
+    if all_posts:
+        targets = drafts
+    elif slugs:
+        by_slug = {post.slug: post for post in posts}
+        missing = [slug for slug in slugs if slug not in by_slug]
+        if missing:
+            available = ", ".join(post.slug for post in posts)
+            return _error(f"没有找到文章：{', '.join(missing)}。可用文章：{available or '无'}", 1)
+        targets = [by_slug[slug] for slug in slugs]
+    else:
+        # 无参数非 TTY，或交互空选择：不发布草稿，仅同步当前站点
+        targets = []
+    new_drafts = [post for post in targets if not post.published]
+    originals = {
+        post.source_path: post.source_path.read_text(encoding="utf-8") for post in new_drafts
+    }
+    for post in new_drafts:
         set_post_published(post.source_path, True)
     try:
         _with_spinner("正在构建站点 ……", build_site, config)
@@ -1371,12 +1434,15 @@ def cmd_publish(all_posts: bool, slugs: list[str]) -> int:
         for source_path, original in originals.items():
             source_path.write_text(original, encoding="utf-8")
         return _error(f"构建失败，已恢复原稿状态：{exc}", 1)
-    print(f"已将 {len(targets)} 篇文章标记为已发布，开始同步 GitHub Pages……")
-    return cmd_deploy()
+    if new_drafts:
+        print(f"已将 {len(new_drafts)} 篇草稿标记为已发布。")
+    else:
+        print("没有需要首次发布的草稿，已重新生成静态站点。")
+    return cmd_deploy(local=local, local_dir=local_dir)
 
 
-def cmd_status() -> int:
-    config = _require_linked()
+def cmd_status(local: bool = False, local_dir: Path | str | None = None) -> int:
+    config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     posts = discover_posts(config.posts_dir)
@@ -1391,7 +1457,9 @@ def cmd_status() -> int:
     print(f"静态输出：{'存在' if config.output_dir.exists() else '未构建'}")
     state, label = _deployment_readiness(config)
     print(f"部署就绪：{label}")
-    if state == "pushed":
+    if state == "actions":
+        print("  当前项目已配置 GitHub Actions 自动构建，代码 push 到远程分支即可自动触发部署。")
+    elif state == "pushed":
         _refine_pushed_state(config)
     return 0
 
@@ -1554,35 +1622,72 @@ def cmd_uninstall(clean: bool) -> int:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper", description="Minimal Python static-site generator and writing CLI")
     parser.add_argument("--version", action="version", version=f"paper {VERSION}")
+    parser.add_argument("-l", "--local", action="store_true", help="Run in local directory mode (uses current directory for posts and site)")
+    parser.add_argument("-C", "--dir", type=str, default=None, help="Run in a specific project directory mode")
+
+    def _add_common_options(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument("-l", "--local", action="store_true", default=argparse.SUPPRESS, help="Run in local directory mode")
+        subparser.add_argument("-C", "--dir", type=str, default=argparse.SUPPRESS, help="Run in a specific project directory mode")
+
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("init", help="Create a standard posts directory and link it")
+    init = commands.add_parser("init", help="Create a standard posts directory and link it")
+    _add_common_options(init)
+
     link = commands.add_parser("link", help="Link an existing Markdown posts directory")
     link.add_argument("path", nargs="?")
+    _add_common_options(link)
+
     new = commands.add_parser("new", help="Create a draft")
     new.add_argument("title", nargs="?")
-    commands.add_parser("list", aliases=["posts"], help="List posts")
-    commands.add_parser("build", help="Generate the production static site")
+    _add_common_options(new)
+
+    list_p = commands.add_parser("list", aliases=["posts"], help="List posts")
+    _add_common_options(list_p)
+
+    build = commands.add_parser("build", help="Generate the production site without deploying")
+    _add_common_options(build)
+
     serve = commands.add_parser("serve", help="Start a local draft preview")
     serve.add_argument("--port", type=int, default=8000)
-    publish = commands.add_parser("publish", help="Publish drafts and sync GitHub Pages")
+    _add_common_options(serve)
+
+    publish = commands.add_parser("publish", help="Publish drafts and sync the live site")
     publish.add_argument("slugs", nargs="*")
     publish.add_argument("--all", action="store_true")
-    commands.add_parser("deploy", help="Retry the GitHub Pages deploy")
-    commands.add_parser("status", help="Show site status")
+    _add_common_options(publish)
+
+    deploy = commands.add_parser("deploy", help="Deploy the current build to GitHub Pages (retry after a failed publish)")
+    _add_common_options(deploy)
+
+    status = commands.add_parser("status", help="Show site status")
+    _add_common_options(status)
+
     config = commands.add_parser("config", help="Open the arrow-key config console")
+    _add_common_options(config)
     config_sub = config.add_subparsers(dest="config_cmd")
     home = config_sub.add_parser("home", help="Brand: highlight color and favicon")
+    _add_common_options(home)
     home_sub = home.add_subparsers(dest="home_cmd")
-    home_sub.add_parser("color", help="Set the highlight color")
-    home_sub.add_parser("icon", help="Set the brand icon")
+    c_color = home_sub.add_parser("color", help="Set the highlight color")
+    _add_common_options(c_color)
+    c_icon = home_sub.add_parser("icon", help="Set the brand icon")
+    _add_common_options(c_icon)
     compress = config_sub.add_parser("compress", help="Enable or disable output image compression")
     compress.add_argument("compress_cmd", nargs="?", choices=["on", "off"])
-    config_sub.add_parser("editor", help="Choose the default editor")
-    config_sub.add_parser("link", help="Link a Markdown posts directory")
-    config_sub.add_parser("remote", help="Configure the GitHub remote / Pages")
-    config_sub.add_parser("pages", help="Set the site URL or custom domain")
-    config_sub.add_parser("test", help="Test Git and remote reachability")
-    config_sub.add_parser("status", help="Show full config and deployment status")
+    _add_common_options(compress)
+    c_editor = config_sub.add_parser("editor", help="Choose the default editor")
+    _add_common_options(c_editor)
+    c_link = config_sub.add_parser("link", help="Link a Markdown posts directory")
+    _add_common_options(c_link)
+    c_remote = config_sub.add_parser("remote", help="Configure the GitHub remote / Pages")
+    _add_common_options(c_remote)
+    c_pages = config_sub.add_parser("pages", help="Set the site URL or custom domain")
+    _add_common_options(c_pages)
+    c_test = config_sub.add_parser("test", help="Test Git and remote reachability")
+    _add_common_options(c_test)
+    c_status = config_sub.add_parser("status", help="Show full config and deployment status")
+    _add_common_options(c_status)
+
     commands.add_parser("doctor", help="Check the install and runtime environment")
     commands.add_parser("update", help="Self-update Paper via Homebrew")
     uninstall = commands.add_parser("uninstall", help="Show uninstall instructions, optionally clean Paper data")
@@ -1590,17 +1695,15 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_dashboard(startup_notice: str = "") -> int:
+def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path | str | None = None) -> int:
     exit_armed = False
     enter_alt_screen()
     try:
         while True:
+            mode_prefix = f"【当前目录模式：{Path(local_dir or '.').resolve().name}】\n" if (local or local_dir is not None) else ""
+            prompt_header = f"{startup_notice}\n\n{mode_prefix}请使用方向键导航，Enter 或数字键选择对应的功能：" if startup_notice else f"{mode_prefix}请使用方向键导航，Enter 或数字键选择对应的功能："
             action = _terminal_menu(
-                (
-                    f"{startup_notice}\n\n请使用方向键导航，Enter 或数字键选择对应的功能："
-                    if startup_notice
-                    else "请使用方向键导航，Enter 或数字键选择对应的功能："
-                ),
+                prompt_header,
                 [
                     ("list", "list", "管理文章"),
                     ("new", "new", "新建文章并打开编辑器"),
@@ -1625,17 +1728,17 @@ def run_dashboard(startup_notice: str = "") -> int:
                 print("\n已退出 Paper。再见！\n")
                 return 0
             if action == "list":
-                cmd_list()
+                cmd_list(local=local, local_dir=local_dir)
             elif action == "new":
-                cmd_new(None)
+                cmd_new(None, local=local, local_dir=local_dir)
                 _pause()
             elif action == "config":
-                cmd_config()
+                cmd_config(local=local, local_dir=local_dir)
             elif action == "publish":
-                cmd_publish(False, [])
+                cmd_publish(False, [], local=local, local_dir=local_dir)
                 _pause()
             elif action == "serve":
-                cmd_serve(8000)
+                cmd_serve(8000, local=local, local_dir=local_dir)
             elif action == "uninstall":
                 cmd_uninstall(True)
                 _pause()
@@ -1645,24 +1748,31 @@ def run_dashboard(startup_notice: str = "") -> int:
 
 def _main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
-    if not raw_argv and sys.stdin.isatty():
-        return run_dashboard(_startup_update_notice())
     args = make_parser().parse_args(raw_argv)
+    
+    local = bool(getattr(args, "local", False))
+    dir_path = getattr(args, "dir", None)
+
     command = args.command
+    if not command and sys.stdin.isatty():
+        return run_dashboard(_startup_update_notice(), local=local, local_dir=dir_path)
+
     if command == "init": return cmd_init()
     if command == "link": return cmd_link(args.path)
-    if command == "new": return cmd_new(args.title)
-    if command in {"list", "posts"}: return cmd_list()
-    if command == "build": return cmd_build()
-    if command == "serve": return cmd_serve(args.port)
-    if command == "publish": return cmd_publish(args.all, args.slugs)
-    if command == "deploy": return cmd_deploy()
-    if command == "status": return cmd_status()
+    if command == "new": return cmd_new(args.title, local=local, local_dir=dir_path)
+    if command in {"list", "posts"}: return cmd_list(local=local, local_dir=dir_path)
+    if command == "build": return cmd_build(local=local, local_dir=dir_path)
+    if command == "serve": return cmd_serve(args.port, local=local, local_dir=dir_path)
+    if command == "publish": return cmd_publish(args.all, args.slugs, local=local, local_dir=dir_path)
+    if command == "deploy": return cmd_deploy(local=local, local_dir=dir_path)
+    if command == "status": return cmd_status(local=local, local_dir=dir_path)
     if command == "config":
         return cmd_config(
             config_cmd=getattr(args, "config_cmd", None),
             home_cmd=getattr(args, "home_cmd", None),
             compress_cmd=getattr(args, "compress_cmd", None),
+            local=local,
+            local_dir=dir_path,
         )
     if command == "doctor": return cmd_doctor()
     if command == "update": return cmd_update()

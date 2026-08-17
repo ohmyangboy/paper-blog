@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cd /Users/yangbukun/Desktop/code/websiteProjects/paper-blog && python3 -c \"import paper_cli; print('import ok')\""]

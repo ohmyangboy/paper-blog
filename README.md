@@ -93,9 +93,9 @@ paper publish
 | `paper new "标题"` | 新建草稿并交给默认编辑器打开 |
 | `paper list` | 查看首页、草稿与已发布文章 |
 | `paper serve` | 启动仅绑定 `127.0.0.1` 的热更新预览 |
-| `paper build` | 生成生产静态站点 |
-| `paper publish` | 勾选草稿、发布并同步 GitHub Pages |
-| `paper deploy` | 重试上一次 GitHub Pages 部署 |
+| `paper publish` | 发布草稿、重新构建并同步 GitHub Pages；修改已发布文章后直接用它更新线上 |
+| `paper build` | 生成生产静态站点（不联网，供检查输出 / CI 使用） |
+| `paper deploy` | 把当前 `out/` 推送到 GitHub Pages（发布失败后的重试入口） |
 | `paper status` | 查看站点与发布状态 |
 | `paper config` | 设置目录、编辑器、仓库、颜色与 favicon |
 | `paper update` | 通过 Homebrew 升级 Paper |

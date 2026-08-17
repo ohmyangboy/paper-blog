@@ -200,8 +200,107 @@ def load_config(*, create: bool = False) -> PaperConfig:
     return result
 
 
+def _detect_git_remote(dir_path: Path) -> str:
+    """Read origin URL from .git/config without invoking external processes."""
+    git_dir = dir_path / ".git"
+    if git_dir.is_file():
+        try:
+            line = git_dir.read_text(encoding="utf-8").strip()
+            if line.startswith("gitdir:"):
+                git_dir = (dir_path / line.removeprefix("gitdir:").strip()).resolve()
+        except OSError:
+            pass
+    config_file = git_dir / "config" if git_dir.is_dir() else None
+    if not config_file or not config_file.is_file():
+        return ""
+    try:
+        content = config_file.read_text(encoding="utf-8")
+        in_remote_origin = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                in_remote_origin = (stripped.lower() == '[remote "origin"]')
+            elif in_remote_origin and stripped.startswith("url ="):
+                return stripped.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _has_github_pages_actions(dir_path: Path) -> bool:
+    """Check if repository has a GitHub Actions workflow deploying to Pages."""
+    workflows_dir = dir_path / ".github" / "workflows"
+    if not workflows_dir.is_dir():
+        return False
+    for wf in workflows_dir.glob("*.y*ml"):
+        try:
+            text = wf.read_text(encoding="utf-8")
+            if "deploy-pages" in text or "upload-pages-artifact" in text:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def load_local_config(target_dir: Path | str = ".") -> PaperConfig:
+    """Load config for a specific directory, prioritizing local project files."""
+    base_dir = Path(target_dir).expanduser().resolve()
+    candidates = [
+        base_dir / ".paper-config.json",
+        base_dir / "paper-config.json",
+        base_dir / "paper.config.json",
+        base_dir / ".paper" / "config.json",
+    ]
+    cfg_file = next((c for c in candidates if c.is_file()), None)
+    loaded: dict[str, Any] = {}
+    if cfg_file:
+        try:
+            loaded = json.loads(cfg_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise ConfigError(f"Paper 本地配置无法读取或不是有效 JSON：{cfg_file}") from None
+
+    posts_sub = base_dir / "posts"
+    has_root_md = any(base_dir.glob("*.md")) if base_dir.is_dir() else False
+    if posts_sub.is_dir():
+        default_posts_dir = posts_sub
+    elif has_root_md:
+        default_posts_dir = base_dir
+    else:
+        default_posts_dir = posts_sub
+    target_config_path = cfg_file or (base_dir / ".paper-config.json")
+
+    loaded_icon = str(loaded.get("icon") or DEFAULT_ICON)
+    if loaded_icon == LEGACY_DEFAULT_ICON_SVG:
+        loaded_icon = DEFAULT_ICON
+
+    raw_site_dir = loaded.get("siteDir") or loaded.get("site_dir")
+    if raw_site_dir and not str(raw_site_dir).startswith(str(paper_home())):
+        site_dir = _path_value(raw_site_dir, base_dir)
+    else:
+        site_dir = base_dir
+
+    detected_remote = _detect_git_remote(base_dir)
+    git_remote = str(loaded.get("gitRemote") or loaded.get("git_remote") or detected_remote)
+
+    return PaperConfig(
+        posts_dir=_path_value(loaded.get("postsDir") or loaded.get("posts_dir"), default_posts_dir),
+        site_dir=site_dir,
+        git_remote=git_remote,
+        editor=str(loaded.get("editor") or "default"),
+        deploy=str(loaded.get("deploy") or "auto"),
+        site_name=str(loaded.get("siteName") or loaded.get("site_name") or DEFAULT_SITE_NAME),
+        site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
+        color=str(loaded.get("color") or DEFAULT_COLOR),
+        icon=loaded_icon,
+        compress=_bool_value(loaded.get("compress"), True),
+        schema_version=CONFIG_SCHEMA_VERSION,
+        config_path=target_config_path,
+    )
+
+
 def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfig:
     current = config or load_config()
+    target_path = current.config_path or config_path()
     values = {
         "posts_dir": current.posts_dir,
         "site_dir": current.site_dir,
@@ -214,7 +313,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         "icon": current.icon,
         "compress": current.compress,
         "schema_version": CONFIG_SCHEMA_VERSION,
-        "config_path": config_path(),
+        "config_path": target_path,
     }
     aliases = {
         "postsDir": "posts_dir", "siteDir": "site_dir", "repoDir": "site_dir",
@@ -235,7 +334,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         icon=str(values["icon"]),
         compress=bool(values["compress"]),
         schema_version=CONFIG_SCHEMA_VERSION,
-        config_path=config_path(),
+        config_path=target_path,
     )
     target = result.config_path
     assert target is not None
@@ -428,23 +527,42 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
     if end < 0 or "\n" in state.src[start:end]:
         return False
     inner = state.src[start + 3:end]
-    target, separator, modifier = inner.partition("|")
-    target = target.strip()
+    parts = [p.strip() for p in inner.split("|") if p.strip()]
+    if not parts:
+        return False
+    target = parts[0]
     if Path(target.split("#", 1)[0]).suffix.lower() not in _IMAGE_SUFFIXES:
         return False
     if not silent:
         token = state.push("image", "img", 0)
         token.attrs = {"src": target, "alt": ""}
-        label = modifier.strip() if separator else Path(target).name
-        dimensions = re.fullmatch(r"([1-9]\d{0,4})(?:x([1-9]\d{0,4}))?", label)
-        if dimensions:
-            token.attrSet("width", dimensions.group(1))
-            if dimensions.group(2):
-                token.attrSet("height", dimensions.group(2))
-                token.attrSet(
-                    "style", f"aspect-ratio: {dimensions.group(1)} / {dimensions.group(2)}"
-                )
-            label = Path(target).name
+        modifiers = parts[1:]
+        align = None
+        label = Path(target).name
+
+        for mod in modifiers:
+            mod_lower = mod.lower()
+            if mod_lower in {"left", "right", "center"}:
+                align = mod_lower
+            elif mod_lower in {"align-left", "align-right", "align-center"}:
+                align = mod_lower.removeprefix("align-")
+            else:
+                dimensions = re.fullmatch(r"([1-9]\d{0,4})(?:x([1-9]\d{0,4}))?", mod)
+                if dimensions:
+                    token.attrSet("width", dimensions.group(1))
+                    if dimensions.group(2):
+                        token.attrSet("height", dimensions.group(2))
+                        token.attrSet(
+                            "style", f"aspect-ratio: {dimensions.group(1)} / {dimensions.group(2)}"
+                        )
+                else:
+                    label = mod
+
+        if align:
+            token.attrSet("data-align", align)
+            token.attrSet("class", f"align-{align}")
+            token.meta["paper_image_align"] = align
+
         alt = Token("text", "", 0)
         alt.content = label
         token.children = [alt]
@@ -505,6 +623,24 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
                         imported = _import_local_image(local_src, import_dir)
                         if imported:
                             child.attrSet("src", normalized_asset_base + imported)
+
+                    # 提取并设置对齐样式（支持 URL hash 语法，如 image.png#left / image.png#right）
+                    align = child.meta.get("paper_image_align")
+                    if not align and "#" in src:
+                        hash_candidate = src.split("#", 1)[1].strip().lower()
+                        if hash_candidate in {"left", "align-left"}:
+                            align = "left"
+                        elif hash_candidate in {"right", "align-right"}:
+                            align = "right"
+                        elif hash_candidate in {"center", "align-center"}:
+                            align = "center"
+
+                    if align:
+                        child.attrSet("data-align", align)
+                        existing_class = child.attrGet("class") or ""
+                        if f"align-{align}" not in existing_class:
+                            child.attrSet("class", f"{existing_class} align-{align}".strip())
+
                     child.attrSet("loading", "lazy")
                     child.attrSet("decoding", "async")
                 elif child.type == "link_open":
@@ -804,6 +940,9 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
 .markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; cursor: zoom-in; }
+.markdown img[data-align="left"], .markdown img.align-left { margin-left: 0; margin-right: auto; }
+.markdown img[data-align="right"], .markdown img.align-right { margin-left: auto; margin-right: 0; }
+.markdown img[data-align="center"], .markdown img.align-center { margin-inline: auto; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
 .image-lightbox { width: 100vw; max-width: none; height: 100vh; max-height: none; padding: 3rem; border: 0; background: transparent; overflow: hidden; }
 .image-lightbox::backdrop { background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(6px); }
