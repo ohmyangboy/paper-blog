@@ -61,6 +61,41 @@ class PaperCoreTests(unittest.TestCase):
         self.assertEqual(rendered.count("<br>"), 2)
         self.assertIn("第一行<br>", rendered)
 
+    def test_markdown_inline_math_preserves_latex_and_renders_span(self):
+        rendered = render_markdown("公式 $a^2 + b^2 = c^2$ 与带下划线上标 $X_{1, 2}^2$ 测试。")
+        self.assertIn('<span class="math math-inline">$a^2 + b^2 = c^2$</span>', rendered)
+        self.assertIn('<span class="math math-inline">$X_{1, 2}^2$</span>', rendered)
+        self.assertNotIn("<em>", rendered)
+
+    def test_markdown_block_math_preserves_multiline_latex(self):
+        source = """
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}
+$$
+"""
+        rendered = render_markdown(source)
+        self.assertIn('<div class="math math-block">$$\n\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}\n$$</div>', rendered)
+
+    def test_markdown_single_line_block_math(self):
+        source = "$$E = mc^2$$"
+        rendered = render_markdown(source)
+        self.assertIn('<div class="math math-block">$$\nE = mc^2\n$$</div>', rendered)
+
+    def test_markdown_currency_symbol_not_treated_as_math(self):
+        rendered = render_markdown("It costs $5 and $10 for two items.")
+        self.assertNotIn('<span class="math', rendered)
+        self.assertIn("$5 and $10", rendered)
+
+    def test_markdown_math_inside_table(self):
+        source = """
+| Theorem | Formula |
+| --- | --- |
+| Euler | $e^{i\\pi} + 1 = 0$ |
+"""
+        rendered = render_markdown(source)
+        self.assertIn("<table>", rendered)
+        self.assertIn('<span class="math math-inline">$e^{i\\pi} + 1 = 0$</span>', rendered)
+
     def test_markdown_blank_line_still_starts_a_paragraph(self):
         rendered = render_markdown("第一段\n\n第二段")
         self.assertNotIn("<br>", rendered)

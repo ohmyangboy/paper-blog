@@ -572,6 +572,121 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
     return True
 
 
+def _math_inline_rule(state: Any, silent: bool) -> bool:
+    pos = state.pos
+    src = state.src
+    if src[pos] != "$":
+        return False
+    if pos > 0 and src[pos - 1] == "\\":
+        return False
+
+    is_double = (pos + 1 < len(src) and src[pos + 1] == "$")
+    marker = "$$" if is_double else "$"
+    start = pos + len(marker)
+
+    if start >= len(src) or src[start] in " \t\n":
+        return False
+
+    end = src.find(marker, start)
+    while end != -1:
+        if src[end - 1] != "\\":
+            break
+        end = src.find(marker, end + 1)
+    if end == -1:
+        return False
+
+    if src[end - 1] in " \t\n":
+        return False
+
+    content = src[start:end]
+    if "\n\n" in content:
+        return False
+
+    if not silent:
+        token = state.push("math_inline", "span", 0)
+        token.markup = marker
+        token.content = content
+    state.pos = end + len(marker)
+    return True
+
+
+def _math_block_rule(state: Any, startLine: int, endLine: int, silent: bool) -> bool:
+    pos = state.bMarks[startLine] + state.tShift[startLine]
+    max_pos = state.eMarks[startLine]
+    line_text = state.src[pos:max_pos].strip()
+
+    if not line_text.startswith("$$"):
+        return False
+
+    # Single-line block: $$ ... $$
+    if len(line_text) >= 4 and line_text.endswith("$$") and line_text != "$$":
+        if silent:
+            return True
+        content = line_text[2:-2].strip()
+        state.line = startLine + 1
+        token = state.push("math_block", "div", 0)
+        token.block = True
+        token.content = content
+        token.map = [startLine, state.line]
+        return True
+
+    # Multi-line block: scan for closing $$
+    next_line = startLine
+    found = False
+    while True:
+        next_line += 1
+        if next_line >= endLine:
+            break
+        p = state.bMarks[next_line] + state.tShift[next_line]
+        m = state.eMarks[next_line]
+        cur_line = state.src[p:m].strip()
+        if cur_line == "$$" or cur_line.endswith("$$"):
+            found = True
+            break
+
+    if not found:
+        return False
+    if silent:
+        return True
+
+    lines = []
+    first_rest = line_text[2:].strip()
+    if first_rest:
+        lines.append(first_rest)
+    for l in range(startLine + 1, next_line):
+        p = state.bMarks[l] + state.tShift[l]
+        m = state.eMarks[l]
+        lines.append(state.src[p:m])
+    last_line = state.src[state.bMarks[next_line] + state.tShift[next_line]:state.eMarks[next_line]].strip()
+    last_rest = last_line[:-2].strip()
+    if last_rest:
+        lines.append(last_rest)
+
+    content = "\n".join(lines)
+    state.line = next_line + 1
+    token = state.push("math_block", "div", 0)
+    token.block = True
+    token.content = content
+    token.map = [startLine, state.line]
+    return True
+
+
+def _render_math_inline(
+    _renderer: Any, tokens: list[Any], index: int, _options: Any, _env: Any
+) -> str:
+    content = html.escape(tokens[index].content)
+    markup = tokens[index].markup
+    cls = "math math-inline" if markup == "$" else "math math-display"
+    return f'<span class="{cls}">{markup}{content}{markup}</span>'
+
+
+def _render_math_block(
+    _renderer: Any, tokens: list[Any], index: int, _options: Any, _env: Any
+) -> str:
+    content = html.escape(tokens[index].content)
+    return f'<div class="math math-block">$$\n{content}\n$$</div>\n'
+
+
 def _render_missing_image(
     _renderer: Any, tokens: list[Any], index: int, _options: Any, _env: Any
 ) -> str:
@@ -590,9 +705,13 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
         raise RuntimeError("Paper 的 Markdown 运行依赖未安装；请重新安装 Paper，不要手动运行 pip。")
     parser = MarkdownIt("js-default", {"highlight": _highlight, "breaks": True})
     parser.enable(["table", "strikethrough"])
+    parser.inline.ruler.before("escape", "paper_math_inline", _math_inline_rule)
+    parser.block.ruler.before("fence", "paper_math_block", _math_block_rule, {"alt": ["paragraph", "reference", "blockquote", "list"]})
     parser.core.ruler.after("block", "paper_blank_lines", _preserve_top_level_blank_lines)
     parser.inline.ruler.before("image", "paper_obsidian_image", _obsidian_image_rule)
     parser.add_render_rule("paper_missing_image", _render_missing_image)
+    parser.add_render_rule("math_inline", _render_math_inline)
+    parser.add_render_rule("math_block", _render_math_block)
 
     normalized_asset_base = "/" + asset_base.strip("/") + "/"
     import_dir = posts_dir.resolve() if posts_dir is not None else None
@@ -950,6 +1069,9 @@ footer { margin-top: 4rem; text-align: center; }
 .image-lightbox-close { position: fixed; top: 1rem; right: 1rem; width: 2.5rem; height: 2.5rem; border: 0; border-radius: 999px; background: rgba(0, 0, 0, 0.62); color: white; font-size: 1.5rem; line-height: 1; cursor: pointer; }
 .task-list-item { list-style: none; margin-left: -1.25rem; }
 .task-list-item input { margin-right: 0.4rem; accent-color: var(--primary); }
+.math-block { overflow-x: auto; overflow-y: hidden; text-align: center; margin: 1.5rem 0; padding: 0.5rem 0; }
+.katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0; margin: 1.5rem 0 !important; }
+.math-inline { font-family: inherit; }
 @media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } }
 @media (min-width: 48rem) { .home-container { margin-top: 4rem; } }
 """
@@ -1014,7 +1136,9 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     lightbox = _image_lightbox()
     page_title = config.site_name if title == config.site_name else f"{title} | {config.site_name}"
     container_class = "container home-container" if home else "container"
-    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\"><title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{PAPER_PROJECT_URL}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{lightbox}{script}</body></html>"""
+    katex_head = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">'
+    katex_scripts = '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:\'$$\',right:\'$$\',display:true},{left:\'$\',right:\'$\',display:false},{left:\'\\\\(\',right:\'\\\\)\',display:false},{left:\'\\\\[\',right:\'\\\\]\',display:true}],throwOnError:false});"></script>'
+    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{PAPER_PROJECT_URL}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{lightbox}{script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
