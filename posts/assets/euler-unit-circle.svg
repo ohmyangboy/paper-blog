@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 420" width="100%" height="100%" style="background: transparent; font-family: -apple-system, system-ui, sans-serif;">
+<line x1="50" y1="210" x2="550" y2="210" stroke="#9ca3af" stroke-width="1.5" />
+<line x1="300" y1="40" x2="300" y2="380" stroke="#9ca3af" stroke-width="1.5" />
+<text x="545" y="200" font-size="12" font-weight="600" fill="#4b5563">Re (实轴)</text>
+<text x="310" y="50" font-size="12" font-weight="600" fill="#4b5563">Im (虚轴)</text>
+<circle cx="300" cy="210" r="130" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="5,3" />
+<polygon points="300,210 383.6,210 383.6,110.4" fill="rgba(217, 119, 87, 0.12)" stroke="#d97757" stroke-width="1.5" />
+<line x1="300" y1="210" x2="383.6" y2="110.4" stroke="#d97757" stroke-width="2.5" />
+<circle cx="383.6" cy="110.4" r="5" fill="#d97757" />
+<path d="M 335 210 A 35 35 0 0 0 322.5 183.2" fill="none" stroke="#d97757" stroke-width="1.5" />
+<text x="345" y="198" font-size="13" font-style="italic" fill="#d97757">θ</text>
+<text x="395.6" y="106.4" font-size="14" font-weight="600" fill="#111827">e^(iθ) = cos(θ) + i·sin(θ)</text>
+<text x="341.8" y="228" font-size="12" font-weight="500" fill="#4b5563" text-anchor="middle">cos(θ)</text>
+<text x="391.6" y="160.2" font-size="12" font-weight="500" fill="#4b5563">sin(θ)</text>
+<text x="438" y="226" font-size="12" fill="#6b7280">1</text>
+<text x="154" y="226" font-size="12" fill="#6b7280">-1 (e^(iπ))</text>
+<text x="282" y="72" font-size="12" fill="#6b7280">i</text>
+<text x="278" y="358" font-size="12" fill="#6b7280">-i</text>
+<text x="300" y="404" font-size="13" font-weight="500" fill="#6b7280" text-anchor="middle">复平面单位圆与欧拉公式几何意义 (Euler Formula in Complex Plane)</text>
+</svg>

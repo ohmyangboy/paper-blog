@@ -19,11 +19,14 @@ from paper_cli import (
     _ALT_SCREEN_ENTER,
     _ALT_SCREEN_LEAVE,
     _PreviewState,
+    _app_picker,
+    _choose_editor,
     _deployment_readiness,
     _list_items,
     _menu_window,
     _open_browser,
     _open_editor,
+    _pick_custom_editor,
     _read_terminal_key,
     _terminal_menu,
     _latest_available_version,
@@ -55,6 +58,17 @@ def _init_with_origin(site_dir: Path, remote: str, gh_pages: bool = False) -> No
 
 
 class PaperCliTests(unittest.TestCase):
+    def _set_paper_home(self, root: Path):
+        old_home = os.environ.get("PAPER_HOME")
+        os.environ["PAPER_HOME"] = str(root / ".paper")
+        return old_home
+
+    def _restore_paper_home(self, old_home):
+        if old_home is None:
+            os.environ.pop("PAPER_HOME", None)
+        else:
+            os.environ["PAPER_HOME"] = old_home
+
     def test_no_argument_interactive_run_opens_dashboard(self):
         with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
             "paper_cli._startup_update_notice", return_value="new version"
@@ -62,7 +76,7 @@ class PaperCliTests(unittest.TestCase):
             "paper_cli.run_dashboard", return_value=0, create=True
         ) as dashboard:
             self.assertEqual(main([]), 0)
-            dashboard.assert_called_once_with("new version")
+            dashboard.assert_called_once_with("new version", local=False, local_dir=None)
 
     def test_terminal_reader_keeps_arrow_escape_sequence_together(self):
         with mock.patch("sys.stdin.fileno", return_value=7), mock.patch(
@@ -171,6 +185,105 @@ class PaperCliTests(unittest.TestCase):
             ), mock.patch("paper_cli.subprocess.Popen") as popen:
                 _open_editor(note, config)
             popen.assert_called_once_with(["open", "-a", "Obsidian", str(note)])
+
+    def test_open_editor_uses_custom_app_bundle(self):
+        with tempfile.TemporaryDirectory() as root:
+            note = Path(root) / "note.md"
+            note.write_text("# Note", encoding="utf-8")
+            config = PaperConfig(posts_dir=note.parent, site_dir=note.parent / ".paper", editor="/Applications/Zed.app")
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "paper_cli.sys.platform", "darwin"
+            ), mock.patch("paper_cli.subprocess.Popen") as popen:
+                _open_editor(note, config)
+            popen.assert_called_once_with(["open", "-a", "/Applications/Zed.app", str(note)])
+
+    def test_open_editor_uses_custom_cli_command(self):
+        with tempfile.TemporaryDirectory() as root:
+            note = Path(root) / "note.md"
+            note.write_text("# Note", encoding="utf-8")
+            config = PaperConfig(posts_dir=note.parent, site_dir=note.parent / ".paper", editor="myeditor")
+            with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+                "paper_cli.sys.platform", "linux"
+            ), mock.patch("paper_cli.subprocess.Popen") as popen:
+                _open_editor(note, config)
+            popen.assert_called_once_with(["myeditor", str(note)])
+
+    def test_app_picker_success(self):
+        with mock.patch("paper_cli.sys.platform", "darwin"), mock.patch(
+            "paper_cli.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="/Applications/Visual Studio Code.app\n"),
+        ):
+            picked = _app_picker()
+            self.assertEqual(picked, Path("/Applications/Visual Studio Code.app").resolve())
+
+    def test_app_picker_failure_or_cancel(self):
+        with mock.patch("paper_cli.sys.platform", "darwin"), mock.patch(
+            "paper_cli.subprocess.run",
+            return_value=mock.Mock(returncode=1, stdout=""),
+        ):
+            self.assertIsNone(_app_picker())
+
+    def test_app_picker_non_darwin(self):
+        with mock.patch("paper_cli.sys.platform", "linux"):
+            self.assertIsNone(_app_picker())
+
+    def test_pick_custom_editor_with_app_picker(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                config = PaperConfig(posts_dir=root_path / "posts", site_dir=root_path / "site")
+                with mock.patch(
+                    "paper_cli._app_picker",
+                    return_value=Path("/Applications/Zed.app"),
+                ):
+                    updated = _pick_custom_editor(config)
+                    self.assertEqual(updated.editor, "/Applications/Zed.app")
+            finally:
+                self._restore_paper_home(old_home)
+
+    def test_pick_custom_editor_fallback_prompt(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                config = PaperConfig(posts_dir=root_path / "posts", site_dir=root_path / "site")
+                with mock.patch("paper_cli._app_picker", return_value=None), mock.patch(
+                    "paper_cli._prompt", return_value="zed"
+                ):
+                    updated = _pick_custom_editor(config)
+                    self.assertEqual(updated.editor, "zed")
+            finally:
+                self._restore_paper_home(old_home)
+
+    def test_choose_editor_custom_selection(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                config = PaperConfig(posts_dir=root_path / "posts", site_dir=root_path / "site")
+                with mock.patch("paper_cli._terminal_menu", return_value="custom"), mock.patch(
+                    "paper_cli._pick_custom_editor",
+                    return_value=PaperConfig(posts_dir=config.posts_dir, site_dir=config.site_dir, editor="/Applications/Zed.app"),
+                ) as pick_mock:
+                    updated = _choose_editor(config)
+                    pick_mock.assert_called_once_with(config)
+                    self.assertEqual(updated.editor, "/Applications/Zed.app")
+            finally:
+                self._restore_paper_home(old_home)
+
+    def test_config_editor_cli_argument(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                self.assertEqual(main(["config", "editor", "/Applications/Zed.app"]), 0)
+                config_file = root_path / ".paper" / "config.json"
+                self.assertEqual(json.loads(config_file.read_text(encoding="utf-8"))["editor"], "/Applications/Zed.app")
+            finally:
+                self._restore_paper_home(old_home)
+
 
     def test_preview_watcher_rebuilds_after_markdown_changes(self):
         with tempfile.TemporaryDirectory() as root:

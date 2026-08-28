@@ -49,7 +49,7 @@ from paper_runtime.core import (
     set_post_published,
 )
 
-VERSION = "0.1.2-beta.2"
+VERSION = "0.1.2-beta.3"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -384,8 +384,57 @@ def _install_favicon_file(config: PaperConfig, source: Path) -> PaperConfig | No
     return save_config(config, icon=f"assets/{target.name}")
 
 
+def _app_picker() -> Path | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose file with prompt "选择用于打开 Markdown 文章的编辑器应用" default location (path to applications folder))',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    return Path(result.stdout.strip()).expanduser().resolve() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def _pick_custom_editor(config: PaperConfig) -> PaperConfig:
+    source = _app_picker()
+    if source is None:
+        raw_path = _prompt("编辑器应用路径或启动命令（留空取消）：")
+        if not raw_path:
+            return config
+        raw_path = raw_path.strip()
+        if "/" in raw_path or raw_path.startswith("~") or Path(raw_path).exists():
+            source_str = str(Path(raw_path).expanduser().resolve())
+        else:
+            source_str = raw_path
+    else:
+        source_str = str(source)
+
+    if source_str:
+        saved = save_config(config, editor=source_str)
+        print(f"✅ 默认编辑器已设置为：{source_str}")
+        return saved
+    return config
+
+
 def _editor_installed(command: str, app_name: str) -> bool:
-    return shutil.which(command) is not None or (sys.platform == "darwin" and (Path("/Applications") / f"{app_name}.app").exists())
+    if shutil.which(command) is not None:
+        return True
+    if sys.platform == "darwin":
+        app_paths = [
+            Path("/Applications") / f"{app_name}.app",
+            Path.home() / "Applications" / f"{app_name}.app",
+            Path("/System/Applications") / f"{app_name}.app",
+        ]
+        return any(p.exists() for p in app_paths)
+    return False
 
 
 def _set_highlight_color(config: PaperConfig) -> PaperConfig:
@@ -435,11 +484,16 @@ def _choose_editor(config: PaperConfig) -> PaperConfig:
         ("cursor", "cursor", "已安装" if _editor_installed("cursor", "Cursor") else "未检测到"),
         ("typora", "typora", "已安装" if _editor_installed("typora", "Typora") else "未检测到"),
         ("obsidian", "obsidian", "已安装" if _editor_installed("obsidian", "Obsidian") else "未检测到"),
+        ("custom", "custom", "选择其他应用（打开文件管理器）"),
         ("back", "back", "不修改"),
     ]
     editor = _terminal_menu("选择新建文章后自动打开的编辑器：", candidates)
+    if editor == "custom":
+        return _pick_custom_editor(config)
     if editor not in {None, "back"}:
-        return save_config(config, editor=editor)
+        saved = save_config(config, editor=editor)
+        print(f"✅ 默认编辑器已设置为：{editor}")
+        return saved
     return config
 
 
@@ -484,6 +538,7 @@ def cmd_config(
     config_cmd: str | None = None,
     home_cmd: str | None = None,
     compress_cmd: str | None = None,
+    editor_name: str | None = None,
     local: bool = False,
     local_dir: Path | str | None = None,
 ) -> int:
@@ -491,7 +546,7 @@ def cmd_config(
     if config is None:
         return 2
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name)
     if not sys.stdin.isatty():
         pages = "（未配置远程）"
         if config.git_remote:
@@ -555,6 +610,7 @@ def _run_config_leaf(
     config_cmd: str,
     home_cmd: str | None,
     compress_cmd: str | None,
+    editor_name: str | None = None,
 ) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
     if config_cmd == "home":
@@ -566,6 +622,13 @@ def _run_config_leaf(
             return 0
         return cmd_brand_config(config)
     if config_cmd == "editor":
+        if editor_name:
+            if editor_name.lower() in {"custom", "picker", "browse"}:
+                _pick_custom_editor(config)
+            else:
+                save_config(config, editor=editor_name)
+                print(f"✅ 默认编辑器已设置为：{editor_name}")
+            return 0
         _choose_editor(config)
         return 0
     if config_cmd == "compress":
@@ -1058,9 +1121,12 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
                 ("vscode", "vscode", "Visual Studio Code"),
                 ("cursor", "cursor", "Cursor"),
                 ("default", "default", "系统默认 Markdown 应用"),
+                ("custom", "custom", "选择其他应用（打开文件管理器）"),
             ],
         )
-        if editor_choice:
+        if editor_choice == "custom":
+            config = _pick_custom_editor(config)
+        elif editor_choice:
             config = save_config(config, editor=editor_choice)
 
     # 6. GitHub 关联引导
@@ -1121,8 +1187,9 @@ def _slug(title: str) -> str:
 
 
 def _open_editor(path: Path, config: PaperConfig) -> None:
-    editor = config.editor.strip().lower()
-    if editor == "none" or not sys.stdin.isatty():
+    raw_editor = config.editor.strip()
+    editor = raw_editor.lower()
+    if editor in {"", "none"} or not sys.stdin.isatty():
         return
     try:
         if editor in {"default", "system", "open"} and sys.platform == "darwin":
@@ -1143,8 +1210,18 @@ def _open_editor(path: Path, config: PaperConfig) -> None:
         elif editor in {"typora", "iawriter", "macdown"} and sys.platform == "darwin":
             app_names = {"typora": "Typora", "iawriter": "iA Writer", "macdown": "MacDown"}
             subprocess.Popen(["open", "-a", app_names[editor], str(path)])
-        elif editor:
-            subprocess.Popen([editor, str(path)])
+        elif sys.platform == "darwin" and (
+            raw_editor.endswith(".app")
+            or ".app/" in raw_editor
+            or (Path("/Applications") / f"{raw_editor}.app").exists()
+            or (Path.home() / "Applications" / f"{raw_editor}.app").exists()
+            or (Path("/System/Applications") / f"{raw_editor}.app").exists()
+        ):
+            subprocess.Popen(["open", "-a", raw_editor, str(path)])
+        elif sys.platform == "darwin" and not shutil.which(raw_editor) and not Path(raw_editor).is_file():
+            subprocess.Popen(["open", "-a", raw_editor, str(path)])
+        elif raw_editor:
+            subprocess.Popen([raw_editor, str(path)])
     except OSError as exc:
         print(f"⚠️ 无法打开编辑器，文章已创建：{exc}")
 
@@ -1880,6 +1957,7 @@ def make_parser() -> argparse.ArgumentParser:
     compress.add_argument("compress_cmd", nargs="?", choices=["on", "off"])
     _add_common_options(compress)
     c_editor = config_sub.add_parser("editor", help="Choose the default editor")
+    c_editor.add_argument("editor_name", nargs="?", help="Editor name, command, or app path")
     _add_common_options(c_editor)
     c_link = config_sub.add_parser("link", help="Link a Markdown posts directory")
     _add_common_options(c_link)
@@ -1975,6 +2053,7 @@ def _main(argv: list[str] | None = None) -> int:
             config_cmd=getattr(args, "config_cmd", None),
             home_cmd=getattr(args, "home_cmd", None),
             compress_cmd=getattr(args, "compress_cmd", None),
+            editor_name=getattr(args, "editor_name", None),
             local=local,
             local_dir=dir_path,
         )
