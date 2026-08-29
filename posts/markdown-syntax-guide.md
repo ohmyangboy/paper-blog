@@ -1,5 +1,5 @@
 ---
-title: Markdown 语法与全功能渲染指南
+title: Paper Blog's Markdown
 date: "2026-08-28"
 published: true
 description: Paper Blog 全功能 Markdown 渲染测试与排版指南，融合文学叙事、深度学习图表、核心数学公式、多语言代码与结构化组件。
