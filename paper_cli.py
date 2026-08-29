@@ -58,7 +58,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.3-beta.2"
+VERSION = "0.1.3-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -1533,7 +1533,7 @@ def _with_spinner(message: str, fn: Callable[..., object], *args: object) -> obj
     """
     if not (sys.stdout.isatty() and sys.stderr.isatty()):
         return fn(*args)
-    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     stop = threading.Event()
     result: dict[str, object] = {}
 
@@ -1548,15 +1548,29 @@ def _with_spinner(message: str, fn: Callable[..., object], *args: object) -> obj
     worker = threading.Thread(target=_run, daemon=True)
     worker.start()
     index = 0
-    label = f"  {message} "
-    while not stop.is_set():
-        sys.stdout.write("\r" + label + frames[index % len(frames)])
-        sys.stdout.flush()
-        index += 1
-        time.sleep(0.08)
-    worker.join()
-    sys.stdout.write("\r" + " " * (len(label) + 1) + "\r")
+    # Hide cursor during spinning
+    sys.stdout.write("\033[?25l")
     sys.stdout.flush()
+    try:
+        while not stop.is_set():
+            cols = shutil.get_terminal_size((80, 20)).columns
+            frame = frames[index % len(frames)]
+            # Clean plain message without escape sequences for length calculation
+            plain_label = re.sub(r"\033\[[0-9;]*m", "", message)
+            display_label = message
+            if len(plain_label) + 6 > cols:
+                display_label = plain_label[: max(cols - 10, 10)] + "..."
+            # \r\033[2K clears the entire line and moves cursor to column 1
+            sys.stdout.write(f"\r\033[2K  {frame} {display_label}")
+            sys.stdout.flush()
+            index += 1
+            time.sleep(0.08)
+    finally:
+        # Clear spinner and restore cursor
+        sys.stdout.write("\r\033[2K\033[?25h")
+        sys.stdout.flush()
+
+    worker.join()
     if "error" in result:
         raise result["error"]  # type: ignore[misc]
     return result.get("value")
@@ -1952,7 +1966,7 @@ def _check_and_auto_update() -> bool:
         )
         return res.returncode
 
-    spinner_msg = f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}"
+    spinner_msg = f"{TERRACOTTA}🆕 {t('auto_update_spinner', latest=latest)}{RESET}"
     res_code = _with_spinner(spinner_msg, _upgrade_task)
 
     if res_code == 0:

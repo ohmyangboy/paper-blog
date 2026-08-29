@@ -1469,6 +1469,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "检测到 Paper 新版本 v{latest}（当前 v{current}），正在自动升级……",
         "en_US": "New Paper version v{latest} detected (Current v{current}), auto-updating...",
     },
+    "auto_update_spinner": {
+        "zh_CN": "正在自动升级 Paper 到 v{latest}……",
+        "en_US": "Auto-updating Paper to v{latest}...",
+    },
     "auto_update_running": {
         "zh_CN": "正在通过 Homebrew 升级 Paper，请稍候……",
         "en_US": "Upgrading Paper via Homebrew, please wait...",
