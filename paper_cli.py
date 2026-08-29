@@ -8,6 +8,7 @@ import atexit
 import datetime as dt
 import http.server
 import json
+import math
 import os
 import re
 import select
@@ -58,7 +59,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.3-beta.2"
+VERSION = "0.1.3-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -1576,6 +1577,73 @@ def _with_spinner(message: str, fn: Callable[..., object], *args: object) -> obj
     return result.get("value")
 
 
+def _with_progress_bar(
+    message: str,
+    fn: Callable[[], int],
+    estimated_seconds: float = 6.0,
+) -> int:
+    """Run a blocking task, animating a smooth terminal progress bar with percentage and spinner."""
+    if not (sys.stdout.isatty() and sys.stderr.isatty()):
+        return fn()
+
+    stop = threading.Event()
+    result: dict[str, int] = {}
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _run() -> None:
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001
+            result["error"] = exc  # type: ignore[assignment]
+        finally:
+            stop.set()
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+
+    start_time = time.time()
+    index = 0
+    bar_width = 16
+
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        while not stop.is_set():
+            elapsed = time.time() - start_time
+            progress = min(0.92, 1.0 - math.exp(-elapsed / max(estimated_seconds * 0.6, 1.0)))
+            percent = int(progress * 100)
+
+            filled = int(bar_width * progress)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            frame = frames[index % len(frames)]
+
+            cols = shutil.get_terminal_size((80, 20)).columns
+            plain_label = re.sub(r"\033\[[0-9;]*m", "", message)
+            prefix = f"  {frame} [{TERRACOTTA}{bar}{RESET}] {percent:3d}% "
+            plain_prefix_len = 2 + 1 + 1 + bar_width + 1 + 5
+            avail = cols - plain_prefix_len - 2
+            if len(plain_label) > avail:
+                plain_label = plain_label[: max(avail - 3, 5)] + "..."
+
+            sys.stdout.write(f"\r\033[2K{prefix}{plain_label}")
+            sys.stdout.flush()
+            index += 1
+            time.sleep(0.08)
+
+        full_bar = "█" * bar_width
+        plain_label = re.sub(r"\033\[[0-9;]*m", "", message)
+        sys.stdout.write(f"\r\033[2K  ✅ [{GREEN}{full_bar}{RESET}] 100% {plain_label}\n")
+        sys.stdout.flush()
+    finally:
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+    worker.join()
+    if "error" in result:
+        raise result["error"]  # type: ignore[misc]
+    return result.get("value", 1)
+
+
 def _run_with_spinner(message: str, argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str] | None:
     """Run a blocking subprocess, animating a loading spinner on a TTY while it works.
 
@@ -1966,11 +2034,11 @@ def _check_and_auto_update() -> bool:
         )
         return res.returncode
 
-    spinner_msg = f"{TERRACOTTA}🆕 {t('auto_update_spinner', latest=latest)}{RESET}"
-    res_code = _with_spinner(spinner_msg, _upgrade_task)
+    progress_msg = f"{t('auto_update_spinner', latest=latest)}"
+    res_code = _with_progress_bar(progress_msg, _upgrade_task, estimated_seconds=6.0)
 
     if res_code == 0:
-        print(f"✅ {t('auto_update_success', latest=latest)}\n")
+        print(f"  {t('auto_update_success', latest=latest)}\n")
         try:
             os.execvp(sys.argv[0], sys.argv)
         except OSError:
@@ -2023,7 +2091,7 @@ def cmd_update() -> int:
         ).returncode
 
     upgrade_msg = t("update_upgrading", current=VERSION, latest=latest)
-    if _with_spinner(upgrade_msg, _run_upgrade) == 0:
+    if _with_progress_bar(upgrade_msg, _run_upgrade, estimated_seconds=6.0) == 0:
         print(t("update_success"))
         return 0
     return _error(t("update_failed_brew_upgrade"), 1)
