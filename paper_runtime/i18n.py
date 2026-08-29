@@ -1337,6 +1337,46 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "  当前项目已配置 GitHub Actions 自动构建，代码 push 到远程分支即可自动触发部署。",
         "en_US": "  This project has GitHub Actions automated deploy configured. Pushing code triggers build automatically.",
     },
+    "status_posts_dir": {
+        "zh_CN": "文章目录：{path}",
+        "en_US": "Posts Directory: {path}",
+    },
+    "status_site_dir": {
+        "zh_CN": "站点目录：{path}",
+        "en_US": "Site Directory: {path}",
+    },
+    "status_posts_count": {
+        "zh_CN": "文章统计：共 {total} 篇，已发布 {published} 篇",
+        "en_US": "Posts Count: {total} total, {published} published",
+    },
+    "status_remote": {
+        "zh_CN": "GitHub 远程：{remote}",
+        "en_US": "GitHub Remote: {remote}",
+    },
+    "status_not_set": {
+        "zh_CN": "未配置",
+        "en_US": "Not configured",
+    },
+    "status_pages_url": {
+        "zh_CN": "Pages 域名：{url}",
+        "en_US": "Pages URL: {url}",
+    },
+    "status_static_out": {
+        "zh_CN": "静态产物：{status}",
+        "en_US": "Static Output: {status}",
+    },
+    "status_out_exists": {
+        "zh_CN": "已生成",
+        "en_US": "Generated",
+    },
+    "status_out_not_built": {
+        "zh_CN": "尚未构建",
+        "en_US": "Not built",
+    },
+    "status_readiness": {
+        "zh_CN": "就绪状态：{status}",
+        "en_US": "Readiness: {status}",
+    },
     "status_pushed_unable_confirm": {
         "zh_CN": "  无法确认远程状态（可运行「测试连接」排查）。",
         "en_US": "  Unable to confirm remote status (run 'Test Connection' to diagnose).",

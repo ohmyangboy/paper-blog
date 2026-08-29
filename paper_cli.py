@@ -58,7 +58,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.3-beta.2"
+VERSION = "0.1.3-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -69,6 +69,7 @@ PAPER_BANNER = f"  {TERRACOTTA}Paper{RESET} {BOLD}Blog{RESET}"
 PREVIEW_POLL_SECONDS = 0.5
 PREVIEW_DEBOUNCE_SECONDS = 2.0
 UPDATE_CHECK_TTL_SECONDS = 6 * 60 * 60
+UPDATE_FORMULA_RAW_URL = "https://raw.githubusercontent.com/ohmyangboy/homebrew-tap/main/Formula/paper.rb"
 UPDATE_RELEASES_URL = "https://api.github.com/repos/ohmyangboy/paper-blog/releases?per_page=10"
 _ALT_SCREEN_ENTER = "\033[?1049h"
 _ALT_SCREEN_LEAVE = "\033[?1049l"
@@ -1854,7 +1855,7 @@ def _version_key(value: str) -> tuple[int, ...]:
 
 
 def _latest_available_version() -> str | None:
-    """Return the newest GitHub release, using a short-lived local cache."""
+    """Return the newest release version, using short-lived local cache and fast CDN."""
 
     cache_path = config_path().parent / "update-check.json"
     cached_version: str | None = None
@@ -1867,38 +1868,48 @@ def _latest_available_version() -> str | None:
     except (OSError, TypeError, ValueError):
         pass
 
-    request = Request(
-        UPDATE_RELEASES_URL,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": f"Paper/{VERSION}"},
-    )
+    latest = None
+    # 1. Try fetching from Homebrew Tap CDN (Zero rate limit, fast & reliable)
     try:
-        with urlopen(request, timeout=2) as response:
-            releases = json.loads(response.read().decode("utf-8"))
-        versions = [
-            str(release.get("tag_name") or "").strip().removeprefix("v")
-            for release in releases
-            if isinstance(release, dict) and not release.get("draft")
-        ]
-        versions = [version for version in versions if re.fullmatch(r"\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?", version)]
-        if not versions:
-            return cached_version
-        latest = max(versions, key=_version_key)
+        req = Request(UPDATE_FORMULA_RAW_URL, headers={"User-Agent": f"Paper/{VERSION}"})
+        with urlopen(req, timeout=1.5) as resp:
+            content = resp.read().decode("utf-8")
+        match = re.search(r"tags/v?([0-9A-Za-z.-]+)\.tar\.gz", content)
+        if match:
+            latest = match.group(1)
+    except Exception:
+        pass
+
+    # 2. Fallback to GitHub Releases API if CDN didn't return a version
+    if not latest:
+        try:
+            request = Request(
+                UPDATE_RELEASES_URL,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": f"Paper/{VERSION}"},
+            )
+            with urlopen(request, timeout=1.5) as response:
+                releases = json.loads(response.read().decode("utf-8"))
+            versions = [
+                str(release.get("tag_name") or "").strip().removeprefix("v")
+                for release in releases
+                if isinstance(release, dict) and not release.get("draft")
+            ]
+            versions = [version for version in versions if re.fullmatch(r"\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?", version)]
+            if versions:
+                latest = max(versions, key=_version_key)
+        except Exception:
+            pass
+
+    try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
-            json.dumps({"checkedAt": time.time(), "latest": latest}, ensure_ascii=False) + "\n",
+            json.dumps({"checkedAt": time.time(), "latest": latest or cached_version}, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        return latest
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(
-                json.dumps({"checkedAt": time.time(), "latest": cached_version}, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
-        return cached_version
+    except OSError:
+        pass
+
+    return latest or cached_version
 
 
 def _startup_update_notice() -> str:
