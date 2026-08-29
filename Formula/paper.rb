@@ -3,8 +3,8 @@ class Paper < Formula
 
   desc "Minimal Markdown static site generator and writing CLI"
   homepage "https://github.com/ohmyangboy/paper-blog"
-  url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v0.1.3-beta.1.tar.gz"
-  sha256 "a8cf83c3c20de51639edb20cca20fa3438f0f11ab2ac3b0e1032519d85b707ad"
+  url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v0.1.3-beta.2.tar.gz"
+  sha256 "0be51d9a2e5832f557b0cba4bf7f68da21be6a0bb8f43af8707976ae52b40529"
   license "GPL-3.0-only"
 
   depends_on "python@3.12"
