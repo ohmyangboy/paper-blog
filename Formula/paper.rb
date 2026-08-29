@@ -4,7 +4,7 @@ class Paper < Formula
   desc "Minimal Markdown static site generator and writing CLI"
   homepage "https://github.com/ohmyangboy/paper-blog"
   url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v0.1.3-beta.2.tar.gz"
-  sha256 "f5fc3381c61f4f77ee33053665ef975df724170eb579dbf22c57a5ddd8ad092b"
+  sha256 "2d0756bc46c9264f377d215c3a3c05324f3e9df6c19687df164db6989a960a5a"
   license "GPL-3.0-only"
 
   depends_on "python@3.12"
