@@ -58,7 +58,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.2"
+VERSION = "0.1.3-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -1824,6 +1824,16 @@ def cmd_doctor() -> int:
     checks.append((sys.version_info >= (3, 11), t("doctor_python_req", ver=sys.version.split()[0])))
     checks.append((shutil.which("git") is not None, t("doctor_git_req")))
     checks.append((_has_config(), t("doctor_config_req", path=config_path())))
+
+    latest = _latest_available_version()
+    if latest:
+        if _version_key(latest) > _version_key(VERSION):
+            checks.append((True, t("doctor_version_outdated", current=VERSION, latest=latest)))
+        else:
+            checks.append((True, t("doctor_version_latest", current=VERSION)))
+    else:
+        checks.append((True, t("doctor_version_current", current=VERSION)))
+
     for ok, name in checks:
         print(f"{'✅' if ok else '❌'} {name}")
     return 0 if all(ok for ok, _ in checks[:2]) else 1
@@ -1880,6 +1890,14 @@ def _latest_available_version() -> str | None:
         )
         return latest
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"checkedAt": time.time(), "latest": cached_version}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         return cached_version
 
 
@@ -1890,6 +1908,43 @@ def _startup_update_notice() -> str:
     if latest and _version_key(latest) > _version_key(VERSION):
         return t("update_notice_banner", latest=latest)
     return ""
+
+
+def _check_and_auto_update() -> bool:
+    """Silently check for updates on startup. If a newer version is available,
+    prompt the user and automatically upgrade via Homebrew if applicable.
+    Returns True if an upgrade was performed and restarted/handled.
+    """
+    if os.environ.get("PAPER_NO_AUTO_UPDATE", "").lower() in ("1", "true", "yes"):
+        return False
+
+    latest = _latest_available_version()
+    if not latest or _version_key(latest) <= _version_key(VERSION):
+        return False
+
+    print(f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}")
+
+    if not _is_homebrew_install():
+        print(f"{TERRACOTTA}{t('update_non_brew')}{RESET}\n")
+        return False
+
+    if shutil.which("brew") is None:
+        print(f"{TERRACOTTA}⚠️ {t('update_brew_missing')}{RESET}\n")
+        return False
+
+    print(f"⏳ {t('auto_update_running')}")
+    subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    res = subprocess.run(["brew", "upgrade", "ohmyangboy/tap/paper"])
+    if res.returncode == 0:
+        print(f"✅ {t('auto_update_success', latest=latest)}\n")
+        try:
+            os.execvp(sys.argv[0], sys.argv)
+        except OSError:
+            return True
+        return True
+    else:
+        print(f"⚠️ {t('auto_update_failed')}\n")
+        return False
 
 
 def _is_homebrew_install() -> bool:
@@ -2113,6 +2168,11 @@ def _main(argv: list[str] | None = None) -> int:
     dir_path = getattr(args, "dir", None)
 
     command = args.command
+    if command not in ("update", "uninstall"):
+        upgraded = _check_and_auto_update()
+        if upgraded:
+            return 0
+
     if not command and sys.stdin.isatty():
         return run_dashboard(_startup_update_notice(), local=local, local_dir=dir_path)
 

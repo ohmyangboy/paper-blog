@@ -1367,6 +1367,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "Paper 配置（{path}）",
         "en_US": "Paper config ({path})",
     },
+    "doctor_version_outdated": {
+        "zh_CN": "当前版本：{current}（可升级至 {latest}，运行 paper update）",
+        "en_US": "Current version: {current} (Upgrade to {latest} via paper update)",
+    },
+    "doctor_version_latest": {
+        "zh_CN": "当前版本：{current}（已是最新版本）",
+        "en_US": "Current version: {current} (Up to date)",
+    },
+    "doctor_version_current": {
+        "zh_CN": "当前版本：{current}",
+        "en_US": "Current version: {current}",
+    },
 
     # ── Update & Uninstall ──
     "update_checking": {
@@ -1412,6 +1424,22 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "update_failed_brew_upgrade": {
         "zh_CN": "brew upgrade 失败，请手动运行：brew upgrade ohmyangboy/tap/paper",
         "en_US": "brew upgrade failed, please run manually: brew upgrade ohmyangboy/tap/paper",
+    },
+    "auto_update_found": {
+        "zh_CN": "检测到 Paper 新版本 v{latest}（当前 v{current}），正在自动升级……",
+        "en_US": "New Paper version v{latest} detected (Current v{current}), auto-updating...",
+    },
+    "auto_update_running": {
+        "zh_CN": "正在通过 Homebrew 升级 Paper，请稍候……",
+        "en_US": "Upgrading Paper via Homebrew, please wait...",
+    },
+    "auto_update_success": {
+        "zh_CN": "Paper 已成功升级到 v{latest}！正在以新版本重新启动……",
+        "en_US": "Paper successfully upgraded to v{latest}! Restarting with new version...",
+    },
+    "auto_update_failed": {
+        "zh_CN": "自动升级未成功，已继续执行当前命令。稍后可手动执行 `paper update` 重试。",
+        "en_US": "Auto-update failed, continuing with current command. You can run `paper update` later.",
     },
     "uninstall_guide": {
         "zh_CN": "Paper 程序由 Homebrew 管理，请使用：brew uninstall paper",

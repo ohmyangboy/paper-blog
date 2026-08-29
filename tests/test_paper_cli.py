@@ -35,6 +35,7 @@ from paper_cli import (
     _watch_preview,
     _with_spinner,
     cmd_config,
+    cmd_doctor,
     cmd_test_connection,
     main,
     make_parser,
@@ -511,6 +512,37 @@ class PaperCliTests(unittest.TestCase):
             self.assertIn("paper update", _startup_update_notice())
         with mock.patch("paper_cli._latest_available_version", return_value=paper_cli.VERSION):
             self.assertEqual(_startup_update_notice(), "")
+
+    def test_cli_subcommands_auto_update_when_available(self):
+        output = io.StringIO()
+        with mock.patch("paper_cli._latest_available_version", return_value="9.9.9"), mock.patch(
+            "paper_cli._is_homebrew_install", return_value=True
+        ), mock.patch("paper_cli.shutil.which", return_value="/opt/homebrew/bin/brew"), mock.patch(
+            "subprocess.run", return_value=mock.MagicMock(returncode=0)
+        ), mock.patch("os.execvp"), contextlib.redirect_stdout(output):
+            self.assertEqual(main(["status"]), 0)
+        rendered = output.getvalue()
+        self.assertIn("9.9.9", rendered)
+        self.assertIn("自动升级", rendered)
+
+    def test_cli_silent_when_no_update_available(self):
+        output = io.StringIO()
+        with mock.patch("paper_cli._latest_available_version", return_value=paper_cli.VERSION), mock.patch(
+            "paper_cli.cmd_status", return_value=0
+        ), contextlib.redirect_stdout(output):
+            self.assertEqual(main(["status"]), 0)
+        rendered = output.getvalue()
+        self.assertNotIn("9.9.9", rendered)
+        self.assertNotIn("自动升级", rendered)
+        self.assertNotIn("新版本", rendered)
+
+    def test_cmd_doctor_includes_version_and_update_check(self):
+        output = io.StringIO()
+        with mock.patch("paper_cli._latest_available_version", return_value="9.9.9"), contextlib.redirect_stdout(output):
+            cmd_doctor()
+        rendered = output.getvalue()
+        self.assertIn("9.9.9", rendered)
+        self.assertIn("paper update", rendered)
 
     def test_latest_version_check_uses_six_hour_cache(self):
         with tempfile.TemporaryDirectory() as root:
