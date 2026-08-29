@@ -764,6 +764,23 @@ $$
         self.assertIn(".markdown .image-group img:not([width]) { flex: 1 1 0; min-width: min(200px, 100%); max-width: 100%; }", css)
         self.assertIn(".markdown .image-group { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0;", css)
 
+    def test_markdown_internal_links_prefixed_with_base_path(self):
+        rendered = render_markdown(
+            "查看 [文章](/posts/hello/) 与 [主页](/) 以及 [外链](https://example.com)。",
+            base_path="/paper-blog",
+        )
+        self.assertIn('href="/paper-blog/posts/hello/"', rendered)
+        self.assertIn('href="/paper-blog/"', rendered)
+        self.assertIn('href="https://example.com"', rendered)
+        self.assertNotIn('href="/paper-blog/paper-blog/', rendered)
+
+    def test_markdown_internal_links_inferred_from_asset_base(self):
+        rendered = render_markdown(
+            "查看 [文章](/posts/guide/)",
+            asset_base="/paper-blog/assets/",
+        )
+        self.assertIn('href="/paper-blog/posts/guide/"', rendered)
+
 
 class TestNormalizeGitRemote(unittest.TestCase):
     VALID = [

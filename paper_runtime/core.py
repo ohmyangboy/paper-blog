@@ -754,11 +754,19 @@ def _is_pure_multi_image_paragraph(children: list[Any] | None) -> tuple[bool, li
     return True, cleaned
 
 
-def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Path | None = None) -> str:
+def render_markdown(
+    source: str,
+    *,
+    asset_base: str = "/assets/",
+    base_path: str = "",
+    posts_dir: Path | None = None,
+) -> str:
     """Render the Paper Markdown Profile with raw HTML disabled by default.
 
     When posts_dir is given, local image references (absolute or relative paths)
     are copied into posts/assets so the built site can serve them.
+    When base_path is provided (e.g. for GitHub Pages project sites), root-relative
+    internal links in Markdown are prefixed automatically.
     """
 
     if MarkdownIt is None:
@@ -774,6 +782,12 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
     parser.add_render_rule("math_block", _render_math_block)
 
     normalized_asset_base = "/" + asset_base.strip("/") + "/"
+    inferred_base = base_path.rstrip("/")
+    if not inferred_base and asset_base.strip("/") not in {"assets", ""}:
+        inferred_base = "/" + asset_base.strip("/").removesuffix("/assets").removesuffix("assets").strip("/")
+        if inferred_base == "/":
+            inferred_base = ""
+
     import_dir = posts_dir.resolve() if posts_dir is not None else None
 
     def decorate_links(state: Any) -> None:
@@ -824,9 +838,12 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
                     child.attrSet("decoding", "async")
                 elif child.type == "link_open":
                     href = child.attrGet("href") or ""
-                    if href.startswith(("http://", "https://")):
+                    if href.startswith(("http://", "https://", "mailto:", "tel:")):
                         child.attrSet("target", "_blank")
                         child.attrSet("rel", "noopener noreferrer")
+                    elif href.startswith("/") and not href.startswith("//"):
+                        if inferred_base and not (href == inferred_base or href.startswith(inferred_base + "/")):
+                            child.attrSet("href", inferred_base + href)
 
     def wrap_multi_image_groups(state: Any) -> None:
         tokens = state.tokens
@@ -1337,8 +1354,9 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
                     f'{html.escape(post.title)}{marker}</a><time class="post-date">{html.escape(post.date)}</time></div>'
                 )
             listing.append("</div></main>")
+            base_path = _base_path(config)
             asset_base = _href(config, "/assets/")
-            index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
+            index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
             _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
             _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload))
             rendered_posts: dict[str, str] = {}
@@ -1346,7 +1364,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             for post in posts:
                 if not post.published and not include_drafts:
                     continue
-                rendered_content = render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)
+                rendered_content = render_markdown(post.content, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)
                 rendered_posts[post.slug] = rendered_content
                 back_icon = f'<a href="javascript:history.back()" class="back-icon" title="{back_title}" aria-label="{back_title}"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
                 article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
