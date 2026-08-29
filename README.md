@@ -37,9 +37,11 @@ Paper 是一个 macOS 优先的 Markdown 静态站点生成器与写作 CLI。�
 - **全流程打通**：`paper new` $\rightarrow$ `paper serve` $\rightarrow$ `paper publish` 一气呵成。
 - **方向键控制台**：直接输入 `paper` 唤出 TUI 控制台，首页置顶，草稿与已发布用 🟢 / ⚪ 清晰区分。
 - **双运行模式**：支持随时随地写作的**全局模式**，也支持独立仓库管理的**项目目录模式（`-l`）**。
+- **双语国际化支持**：CLI 控制台与向导原生支持中文与英文，提供 `--lang [zh_CN|en_US|auto]` 与交互式语言切换。
+- **LaTeX 数学公式**：内置极简数学公式渲染引擎，原生支持行内 `$E=mc^2$` 与独立块级公式 `$$\dots$$`。
 - **本地热更新预览**：内置极轻量 HTTP 服务，监听文件变更自动刷新；草稿不会意外流出到生产构建。
 - **GitHub Pages 自动化**：配置一次仓库即可全自动构建并推送 `gh-pages` 分支。
-- **Obsidian 深度兼容**：支持 `![[image.png]]` 等图片语法，可一键唤醒 Obsidian 原生应用编辑。
+- **Obsidian 深度兼容**：支持 `![[image.png|300|center]]` 等图片尺寸与居中对齐排版语法，可一键唤醒 Obsidian 原生应用编辑。
 - **完整订阅与 SEO**：自动生成包含全文与作者信息的 RSS 2.0 订阅源与 sitemap.xml。
 - **原稿安全保证**：Paper 仅管理静态输出与部署，无论升级或卸载均**绝不触碰**你的 Markdown 原稿。
 
@@ -145,6 +147,7 @@ Paper 原生支持两种使用习惯，满足不同场景：
 | 命令 | 作用 |
 | --- | --- |
 | `paper` | 打开交互式 TUI 文章控制台（方向键导航） |
+| `paper --lang <zh_CN\|en_US\|auto>` | 指定本次运行的界面语言 |
 | `paper new [标题]` | 新建草稿，并自动唤醒编辑器打开 |
 | `paper serve` | 启动本地热更新预览服务（默认端口 8000） |
 | `paper publish [slug]` | 发布指定草稿或更新已发布文章，并自动同步 GitHub Pages |
@@ -152,6 +155,7 @@ Paper 原生支持两种使用习惯，满足不同场景：
 | `paper build` | 仅生成生产环境静态文件到 `out/` 目录（供 CI 或离线检查） |
 | `paper deploy` | 手动把当前静态站点推送到 GitHub Pages（发布重试入口） |
 | `paper config` | 进入交互式站点与外观设置控制台 |
+| `paper config lang [zh_CN\|en_US\|auto]` | 切换并持久化界面语言 |
 | `paper config remote` | 快速配置或修改 GitHub 仓库与自定义域名 |
 | `paper config editor` | 快捷配置默认编辑器（VS Code / Obsidian / Typora / 系统默认等） |
 | `paper doctor` | 检查当前 Python 运行时、Git 及网络配置状态 |
@@ -177,6 +181,18 @@ description: 这是一篇关于 Paper 的极简介绍
 单回车直接换行，空行用于分段。
 ```
 
+### LaTeX 数学公式渲染
+
+原生支持 LaTeX 数学排版，无需繁琐配置：
+
+* **行内公式**：使用 `$E = mc^2$` 语法，如 `$f(x) = \frac{1}{\sqrt{2\pi}} e^{-\frac{x^2}{2}}$`。
+* **独立块级公式**：使用 `$$` 包裹多行公式块：
+  ```latex
+  $$
+  \nabla \times \mathbf{E} = -\frac{\partial \mathbf{B}}{\partial t}
+  $$
+  ```
+
 ### 本地图片与 Obsidian 语法支持
 
 推荐将图片放在文章目录的 `assets/` 下：
@@ -184,22 +200,26 @@ description: 这是一篇关于 Paper 的极简介绍
 ![图片说明](assets/cover.png)
 ```
 
-**完全兼容 Obsidian 图片内嵌语法**：
+**完全兼容 Obsidian 图片内嵌与尺寸/对齐语法**：
 ```md
 ![[image.png]]
 ![[image.png|图片说明]]
 ![[image.png|400]]
 ![[image.png|400x300]]
+![[image.png|300|center]]
+![[image.png|left]]
 ```
-*构建时 Paper 会自动扫描关联目录，将正文引用的有效图片打包复制到输出资源中，并支持无损图片压缩。*
+*构建时 Paper 会自动扫描关联目录，将正文引用的有效图片打包复制到输出资源中，并支持可选的无损图片压缩。*
 
 ---
 
 ## 🎨 站点外观与品牌定制
 
 输入 `paper config` 可随时自定义：
+- **界面语言（Language）**：简体中文 (`zh_CN`)、English (`en_US`) 或跟随系统 (`auto`)。
 - **主题高亮色**：修改网站强调色（默认温润纸质橙 `#D97757`）。
 - **网站图标（Favicon）**：支持使用 Paper 经典 zine 图标、自定义本地 PNG/SVG/ICO、或直接粘贴图标代码。
+- **图片压缩**：开启/关闭静态构建图片优化压缩。
 - **自定义域名与 Pages 路径**：支持形如 `https://username.github.io/repo` 或自定义独立域名 `https://blog.yourdomain.com`。
 
 ---

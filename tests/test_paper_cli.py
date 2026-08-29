@@ -507,7 +507,7 @@ class PaperCliTests(unittest.TestCase):
         self.assertEqual(_version_key("0.1.1-beta.1"), _version_key("0.1.1-beta.1"))
 
     def test_startup_update_notice_reports_newer_release(self):
-        with mock.patch("paper_cli._latest_available_version", return_value="0.1.2"):
+        with mock.patch("paper_cli._latest_available_version", return_value="9.9.9"):
             self.assertIn("paper update", _startup_update_notice())
         with mock.patch("paper_cli._latest_available_version", return_value=paper_cli.VERSION):
             self.assertEqual(_startup_update_notice(), "")
@@ -518,12 +518,12 @@ class PaperCliTests(unittest.TestCase):
             os.environ["PAPER_HOME"] = str(Path(root) / ".paper")
             response = mock.MagicMock()
             response.__enter__.return_value.read.return_value = (
-                b'[{"tag_name":"v0.1.2","draft":false},{"tag_name":"v0.1.1-beta.4","draft":false}]'
+                b'[{"tag_name":"v9.9.9","draft":false},{"tag_name":"v0.1.1-beta.4","draft":false}]'
             )
             try:
                 with mock.patch("paper_cli.urlopen", return_value=response) as open_url:
-                    self.assertEqual(_latest_available_version(), "0.1.2")
-                    self.assertEqual(_latest_available_version(), "0.1.2")
+                    self.assertEqual(_latest_available_version(), "9.9.9")
+                    self.assertEqual(_latest_available_version(), "9.9.9")
                 open_url.assert_called_once()
             finally:
                 if old_home is None:

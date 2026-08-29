@@ -58,7 +58,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.2-beta.3"
+VERSION = "0.1.2"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
