@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
 
+from .i18n import override_language, resolve_language, set_current_language, t
+
 try:
     from markdown_it import MarkdownIt
     from markdown_it.token import Token
@@ -48,6 +50,9 @@ _SAFE_SLUG = re.compile(r"[^\w\-\u4e00-\u9fff]+", re.UNICODE)
 _BOOLS = {"true": True, "false": False, "yes": True, "no": False}
 
 
+from .i18n import get_current_language, normalize_locale, resolve_language, set_current_language, t
+
+
 class ConfigError(RuntimeError):
     """A configuration file exists but cannot safely be used."""
 
@@ -64,6 +69,7 @@ class PaperConfig:
     color: str = DEFAULT_COLOR
     icon: str = DEFAULT_ICON
     compress: bool = True
+    language: str = "auto"
     schema_version: int = CONFIG_SCHEMA_VERSION
     config_path: Path | None = field(default=None, repr=False, compare=False)
 
@@ -79,6 +85,7 @@ class PaperConfig:
         data["gitRemote"] = data.pop("git_remote")
         data["siteName"] = data.pop("site_name")
         data["siteUrl"] = data.pop("site_url")
+        data["language"] = self.language
         data["schemaVersion"] = data.pop("schema_version")
         return data
 
@@ -185,6 +192,7 @@ def load_config(*, create: bool = False) -> PaperConfig:
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
         compress=_bool_value(loaded.get("compress"), True),
+        language=str(loaded.get("language") or "auto"),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=target,
     )
@@ -293,6 +301,7 @@ def load_local_config(target_dir: Path | str = ".") -> PaperConfig:
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
         compress=_bool_value(loaded.get("compress"), True),
+        language=str(loaded.get("language") or "auto"),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=target_config_path,
     )
@@ -312,12 +321,14 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         "color": current.color,
         "icon": current.icon,
         "compress": current.compress,
+        "language": current.language,
         "schema_version": CONFIG_SCHEMA_VERSION,
         "config_path": target_path,
     }
     aliases = {
         "postsDir": "posts_dir", "siteDir": "site_dir", "repoDir": "site_dir",
         "gitRemote": "git_remote", "siteName": "site_name", "siteUrl": "site_url",
+        "language": "language", "lang": "language",
         "schemaVersion": "schema_version",
     }
     for key, value in changes.items():
@@ -333,6 +344,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         color=str(values["color"]),
         icon=str(values["icon"]),
         compress=bool(values["compress"]),
+        language=str(values["language"]),
         schema_version=CONFIG_SCHEMA_VERSION,
         config_path=target_path,
     )
@@ -691,7 +703,55 @@ def _render_missing_image(
     _renderer: Any, tokens: list[Any], index: int, _options: Any, _env: Any
 ) -> str:
     filename = html.escape(tokens[index].content)
-    return f'<span class="missing-image" role="img">图片未找到：{filename}</span>'
+    text = t("image_not_found", filename=filename)
+    return f'<span class="missing-image" role="img">{text}</span>'
+
+
+def _is_pure_multi_image_paragraph(children: list[Any] | None) -> tuple[bool, list[Any]]:
+    """Check if inline children consist only of 2+ images (or linked images) and optional whitespace/breaks."""
+    if not children:
+        return False, []
+
+    image_count = 0
+    cleaned: list[Any] = []
+    in_link = False
+    link_tokens: list[Any] = []
+    has_image_in_current_link = False
+
+    for child in children:
+        if child.type in {"image", "paper_missing_image"}:
+            image_count += 1
+            if in_link:
+                has_image_in_current_link = True
+                link_tokens.append(child)
+            else:
+                cleaned.append(child)
+        elif child.type == "link_open":
+            if in_link:
+                return False, children
+            in_link = True
+            link_tokens = [child]
+            has_image_in_current_link = False
+        elif child.type == "link_close":
+            if not in_link or not has_image_in_current_link:
+                return False, children
+            link_tokens.append(child)
+            cleaned.extend(link_tokens)
+            in_link = False
+            link_tokens = []
+        elif child.type in {"softbreak", "hardbreak"}:
+            continue
+        elif child.type == "text":
+            if not child.content.strip():
+                continue
+            return False, children
+        else:
+            return False, children
+
+    if in_link or image_count < 2:
+        return False, children
+
+    return True, cleaned
 
 
 def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Path | None = None) -> str:
@@ -768,7 +828,25 @@ def render_markdown(source: str, *, asset_base: str = "/assets/", posts_dir: Pat
                         child.attrSet("target", "_blank")
                         child.attrSet("rel", "noopener noreferrer")
 
+    def wrap_multi_image_groups(state: Any) -> None:
+        tokens = state.tokens
+        for i, token in enumerate(tokens):
+            if token.type == "paragraph_open":
+                if (
+                    i + 2 < len(tokens)
+                    and tokens[i + 1].type == "inline"
+                    and tokens[i + 2].type == "paragraph_close"
+                ):
+                    inline_token = tokens[i + 1]
+                    is_multi, cleaned = _is_pure_multi_image_paragraph(inline_token.children)
+                    if is_multi:
+                        token.tag = "div"
+                        token.attrSet("class", "image-group")
+                        inline_token.children = cleaned
+                        tokens[i + 2].tag = "div"
+
     parser.core.ruler.after("inline", "paper_links_and_images", decorate_links)
+    parser.core.ruler.after("paper_links_and_images", "paper_multi_image_groups", wrap_multi_image_groups)
     rendered = parser.render(source)
     return _task_list_transform(rendered)
 
@@ -1063,6 +1141,12 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown img[data-align="right"], .markdown img.align-right { margin-left: auto; margin-right: 0; }
 .markdown img[data-align="center"], .markdown img.align-center { margin-inline: auto; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
+.markdown .image-group { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 1rem; width: 120%; max-width: 120%; margin-left: -10%; margin-right: -10%; margin-top: 1.5rem; margin-bottom: 1.5rem; box-sizing: border-box; }
+.markdown .image-group img { display: block; max-width: 100%; height: auto; margin: 0; flex: 0 1 auto; }
+.markdown .image-group img:not([width]) { flex: 1 1 0; min-width: min(200px, 100%); max-width: 100%; }
+.markdown .image-group a { display: inline-flex; justify-content: center; align-items: center; text-decoration: none; }
+.markdown .image-group a img { margin: 0; }
+.markdown .image-group .missing-image { margin: 0; flex: 0 1 auto; }
 .image-lightbox { width: 100vw; max-width: none; height: 100vh; max-height: none; padding: 3rem; border: 0; background: transparent; overflow: hidden; }
 .image-lightbox::backdrop { background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(6px); }
 .image-lightbox img { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -1072,7 +1156,7 @@ footer { margin-top: 4rem; text-align: center; }
 .math-block { overflow-x: auto; overflow-y: hidden; text-align: center; margin: 1.5rem 0; padding: 0.5rem 0; }
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0; margin: 1.5rem 0 !important; }
 .math-inline { font-family: inherit; }
-@media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } }
+@media (max-width: 640px) { body { padding: 2.5rem 1.5rem; } .post-item { align-items: flex-start; gap: 0.5rem; } .back-icon { left: -1.5rem; } .markdown .image-group { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0; gap: 0.75rem; } }
 @media (min-width: 48rem) { .home-container { margin-top: 4rem; } }
 """
     pygments_css = _formatter.get_style_defs(".syntax-highlight") if _formatter else ""
@@ -1126,11 +1210,13 @@ def _live_reload_script() -> str:
 
 
 def _image_lightbox() -> str:
-    return """<dialog class="image-lightbox" aria-label="图片大图预览"><button class="image-lightbox-close" type="button" aria-label="关闭大图">×</button><img alt=""></dialog><script>(()=>{const d=document.querySelector('.image-lightbox');const v=d.querySelector('img');document.addEventListener('click',e=>{const i=e.target.closest?.('.markdown img');if(!i||i.closest('a'))return;const s=i.currentSrc||i.src;if(typeof d.showModal!=='function'){window.open(s,'_blank','noopener');return}v.src=s;v.alt=i.alt||'';d.showModal()});d.querySelector('.image-lightbox-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{if(e.target===d)d.close()});d.addEventListener('close',()=>{v.removeAttribute('src')})})();</script>"""
+    preview_label = html.escape(t("lightbox_preview"), quote=True)
+    close_label = html.escape(t("lightbox_close"), quote=True)
+    return f"""<dialog class="image-lightbox" aria-label="{preview_label}"><button class="image-lightbox-close" type="button" aria-label="{close_label}">×</button><img alt=""></dialog><script>(()=>{{const d=document.querySelector('.image-lightbox');const v=d.querySelector('img');document.addEventListener('click',e=>{{const i=e.target.closest?.('.markdown img');if(!i||i.closest('a'))return;const s=i.currentSrc||i.src;if(typeof d.showModal!=='function'){{window.open(s,'_blank','noopener');return}}v.src=s;v.alt=i.alt||'';d.showModal()}});d.querySelector('.image-lightbox-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{{if(e.target===d)d.close()}});d.addEventListener('close',()=>{{v.removeAttribute('src')}})}})();</script>"""
 
 
 def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False) -> str:
-    marker = '<p><strong>草稿预览</strong></p>' if draft else ""
+    marker = f'<p><strong>{t("draft_preview")}</strong></p>' if draft else ""
     script = _live_reload_script() if live_reload else ""
     favicon = html.escape(_favicon_href(config), quote=True)
     lightbox = _image_lightbox()
@@ -1138,7 +1224,8 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     container_class = "container home-container" if home else "container"
     katex_head = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">'
     katex_scripts = '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:\'$$\',right:\'$$\',display:true},{left:\'$\',right:\'$\',display:false},{left:\'\\\\(\',right:\'\\\\)\',display:false},{left:\'\\\\[\',right:\'\\\\]\',display:true}],throwOnError:false});"></script>'
-    return f"""<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"strict-origin-when-cross-origin\"><meta name=\"theme-color\" content=\"{html.escape(config.color, quote=True)}\"><link rel=\"icon\" href=\"{favicon}\">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class=\"{container_class}\">{marker}{body}</div><footer><a href=\"{PAPER_PROJECT_URL}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"footer-brand\">Paper Blog</a></footer>{lightbox}{script}{katex_scripts}</body></html>"""
+    html_lang = t("html_lang_code")
+    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a></footer>{lightbox}{script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -1226,109 +1313,114 @@ def _copy_referenced_assets(
 
 def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload: bool = False) -> Path:
     """Build into a temporary tree, then atomically replace only generated output."""
-
-    config.site_dir.mkdir(parents=True, exist_ok=True)
-    posts_dir = config.posts_dir
-    posts_dir.mkdir(parents=True, exist_ok=True)
-    posts = discover_posts(posts_dir, include_drafts=include_drafts)
-    published = [post for post in posts if post.published]
-    index_path = posts_dir / "index.md"
-    index_source = index_path.read_text(encoding="utf-8") if index_path.exists() else DEFAULT_INDEX
-    _, index_body = parse_frontmatter(index_source)
-    temp_parent = Path(tempfile.mkdtemp(prefix="paper-build-", dir=config.site_dir))
-    try:
-        rss_href = html.escape(_href(config, "/rss.xml"), quote=True)
-        listing = [f'<main><div class="writing-header"><h2>Writing</h2><a href="{rss_href}" class="footer-brand">RSS</a></div><div class="post-list">']
-        for post in posts:
-            if not post.published and not include_drafts:
-                continue
-            marker = "（草稿）" if not post.published else ""
-            listing.append(
-                f'<div class="post-item"><a class="post-title" href="{_href(config, f"/posts/{post.slug}/")}">'
-                f'{html.escape(post.title)}{marker}</a><time class="post-date">{html.escape(post.date)}</time></div>'
-            )
-        listing.append("</div></main>")
-        asset_base = _href(config, "/assets/")
-        index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
-        _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
-        _write(temp_parent / "404.html", _layout(config, "Not found", "<main><h1>Not found</h1></main>", live_reload=live_reload))
-        rendered_posts: dict[str, str] = {}
-        for post in posts:
-            if not post.published and not include_drafts:
-                continue
-            rendered_content = render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)
-            rendered_posts[post.slug] = rendered_content
-            back_icon = '<a href="javascript:history.back()" class="back-icon" title="返回上一页" aria-label="返回上一页"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
-            article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
-            article += f'<div class="markdown">{rendered_content}</div></article></main>'
-            _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
-
-        _copy_default_icon(temp_parent, config)
-        _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress)
-
-        author = _feed_author(config)
-        feed_title = f"{config.site_name} @{author}" if author else config.site_name
-        site_home = _absolute_href(config, "/")
-        feed_url = _absolute_href(config, "/rss.xml")
-        feed_icon = _feed_icon_url(config)
-        rss_items: list[str] = []
-        sitemap_urls = [_absolute_href(config, "/")]
-        for post in published:
-            url = _absolute_href(config, f"/posts/{post.slug}/")
-            full_content = _absolute_document_urls(config, rendered_posts[post.slug])
-            creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
-            rss_items.append(
-                f"<item><title>{html.escape(post.title)}</title>"
-                f"<link>{html.escape(url)}</link>"
-                f'<guid isPermaLink="true">{html.escape(url)}</guid>'
-                f"<pubDate>{html.escape(_rss_date(post.date))}</pubDate>"
-                f"{creator}"
-                f"<description>{html.escape(full_content)}</description>"
-                f"<content:encoded>{html.escape(full_content)}</content:encoded>"
-                "</item>"
-            )
-            sitemap_urls.append(url)
-        channel_creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
-        channel_image = ""
-        if urlparse(feed_icon).scheme in {"http", "https"}:
-            channel_image = (
-                f"<image><url>{html.escape(feed_icon)}</url>"
-                f"<title>{html.escape(feed_title)}</title>"
-                f"<link>{html.escape(site_home)}</link></image>"
-            )
-        rss = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            '<rss version="2.0" '
-            'xmlns:content="http://purl.org/rss/1.0/modules/content/" '
-            'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-            'xmlns:atom="http://www.w3.org/2005/Atom">'
-            f"<channel><title>{html.escape(feed_title)}</title>"
-            f"<link>{html.escape(site_home)}</link>"
-            f"<description>{html.escape(feed_title)} 的最新文章</description>"
-            "<language>zh-CN</language><generator>Paper Blog</generator>"
-            f'<atom:link href="{html.escape(feed_url, quote=True)}" rel="self" type="application/rss+xml" />'
-            f"{channel_creator}{channel_image}{''.join(rss_items)}</channel></rss>"
-        )
-        _write(temp_parent / "rss.xml", rss)
-        sitemap = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" + "".join(f"<url><loc>{html.escape(url)}</loc></url>" for url in sitemap_urls) + "</urlset>"
-        _write(temp_parent / "sitemap.xml", sitemap)
-        output = config.output_dir
-        backup = config.site_dir / ".paper-out-backup"
-        if backup.exists():
-            shutil.rmtree(backup)
+    effective_lang = resolve_language(config_lang=config.language)
+    with override_language(effective_lang):
+        config.site_dir.mkdir(parents=True, exist_ok=True)
+        posts_dir = config.posts_dir
+        posts_dir.mkdir(parents=True, exist_ok=True)
+        posts = discover_posts(posts_dir, include_drafts=include_drafts)
+        published = [post for post in posts if post.published]
+        index_path = posts_dir / "index.md"
+        index_source = index_path.read_text(encoding="utf-8") if index_path.exists() else DEFAULT_INDEX
+        _, index_body = parse_frontmatter(index_source)
+        temp_parent = Path(tempfile.mkdtemp(prefix="paper-build-", dir=config.site_dir))
         try:
-            if output.exists():
-                output.rename(backup)
-            temp_parent.rename(output)
+            rss_href = html.escape(_href(config, "/rss.xml"), quote=True)
+            listing = [f'<main><div class="writing-header"><h2>Writing</h2><a href="{rss_href}" class="footer-brand">RSS</a></div><div class="post-list">']
+            draft_tag = t("draft_tag_paren")
+            for post in posts:
+                if not post.published and not include_drafts:
+                    continue
+                marker = draft_tag if not post.published else ""
+                listing.append(
+                    f'<div class="post-item"><a class="post-title" href="{_href(config, f"/posts/{post.slug}/")}">'
+                    f'{html.escape(post.title)}{marker}</a><time class="post-date">{html.escape(post.date)}</time></div>'
+                )
+            listing.append("</div></main>")
+            asset_base = _href(config, "/assets/")
+            index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
+            _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
+            _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload))
+            rendered_posts: dict[str, str] = {}
+            back_title = html.escape(t("back_to_previous"), quote=True)
+            for post in posts:
+                if not post.published and not include_drafts:
+                    continue
+                rendered_content = render_markdown(post.content, asset_base=asset_base, posts_dir=posts_dir)
+                rendered_posts[post.slug] = rendered_content
+                back_icon = f'<a href="javascript:history.back()" class="back-icon" title="{back_title}" aria-label="{back_title}"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
+                article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
+                article += f'<div class="markdown">{rendered_content}</div></article></main>'
+                _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
+
+            _copy_default_icon(temp_parent, config)
+            _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress)
+
+            author = _feed_author(config)
+            feed_title = f"{config.site_name} @{author}" if author else config.site_name
+            site_home = _absolute_href(config, "/")
+            feed_url = _absolute_href(config, "/rss.xml")
+            feed_icon = _feed_icon_url(config)
+            rss_items: list[str] = []
+            sitemap_urls = [_absolute_href(config, "/")]
+            for post in published:
+                url = _absolute_href(config, f"/posts/{post.slug}/")
+                full_content = _absolute_document_urls(config, rendered_posts[post.slug])
+                creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
+                rss_items.append(
+                    f"<item><title>{html.escape(post.title)}</title>"
+                    f"<link>{html.escape(url)}</link>"
+                    f'<guid isPermaLink="true">{html.escape(url)}</guid>'
+                    f"<pubDate>{html.escape(_rss_date(post.date))}</pubDate>"
+                    f"{creator}"
+                    f"<description>{html.escape(full_content)}</description>"
+                    f"<content:encoded>{html.escape(full_content)}</content:encoded>"
+                    "</item>"
+                )
+                sitemap_urls.append(url)
+            channel_creator = f"<dc:creator>{html.escape(author)}</dc:creator>" if author else ""
+            channel_image = ""
+            if urlparse(feed_icon).scheme in {"http", "https"}:
+                channel_image = (
+                    f"<image><url>{html.escape(feed_icon)}</url>"
+                    f"<title>{html.escape(feed_title)}</title>"
+                    f"<link>{html.escape(site_home)}</link></image>"
+                )
+            rss_desc = html.escape(t("rss_description", site_name=feed_title))
+            rss_lang = t("rss_lang_code")
+            rss = (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<rss version="2.0" '
+                'xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+                'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+                'xmlns:atom="http://www.w3.org/2005/Atom">'
+                f"<channel><title>{html.escape(feed_title)}</title>"
+                f"<link>{html.escape(site_home)}</link>"
+                f"<description>{rss_desc}</description>"
+                f"<language>{rss_lang}</language><generator>Paper Blog</generator>"
+                f'<atom:link href="{html.escape(feed_url, quote=True)}" rel="self" type="application/rss+xml" />'
+                f"{channel_creator}{channel_image}{''.join(rss_items)}</channel></rss>"
+            )
+            _write(temp_parent / "rss.xml", rss)
+            sitemap = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" + "".join(f"<url><loc>{html.escape(url)}</loc></url>" for url in sitemap_urls) + "</urlset>"
+            _write(temp_parent / "sitemap.xml", sitemap)
+            output = config.output_dir
+            backup = config.site_dir / ".paper-out-backup"
             if backup.exists():
                 shutil.rmtree(backup)
-            return output
+            try:
+                if output.exists():
+                    output.rename(backup)
+                temp_parent.rename(output)
+                if backup.exists():
+                    shutil.rmtree(backup)
+                return output
+            except Exception:
+                if output.exists():
+                    shutil.rmtree(output, ignore_errors=True)
+                if backup.exists():
+                    backup.rename(output)
+                raise
         except Exception:
-            if output.exists():
-                shutil.rmtree(output, ignore_errors=True)
-            if backup.exists():
-                backup.rename(output)
+            shutil.rmtree(temp_parent, ignore_errors=True)
             raise
-    except Exception:
-        shutil.rmtree(temp_parent, ignore_errors=True)
-        raise

@@ -61,6 +61,12 @@ The empirical loss and probability density follow parametric surfaces $\hat{\mat
   - [x] 基础排版模块合并与紧凑同屏优化
   - [ ] 探索超大规模参数模型涌现能力边界
 
+### 3.3 图片排版与多图画廊 (Images & Gallery)
+
+![[macos-mountain-lake.jpg]] ![[macos-coastal-cliff.jpg]]
+
+![[macos-mountain-lake.jpg|460]] ![[macos-coastal-cliff.jpg|460]]
+
 ---
 
 ## 4. 工程组件与结构化数据

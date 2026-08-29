@@ -41,6 +41,7 @@ from paper_cli import (
     run_dashboard,
 )
 from paper_runtime.core import PaperConfig, build_site
+from paper_runtime.i18n import get_current_language, set_current_language
 
 
 def _init_with_origin(site_dir: Path, remote: str, gh_pages: bool = False) -> None:
@@ -58,6 +59,19 @@ def _init_with_origin(site_dir: Path, remote: str, gh_pages: bool = False) -> No
 
 
 class PaperCliTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_lang = get_current_language()
+        self._orig_paper_lang = os.environ.get("PAPER_LANG")
+        os.environ["PAPER_LANG"] = "zh_CN"
+        set_current_language("zh_CN")
+
+    def tearDown(self):
+        if self._orig_paper_lang is None:
+            os.environ.pop("PAPER_LANG", None)
+        else:
+            os.environ["PAPER_LANG"] = self._orig_paper_lang
+        set_current_language(self._orig_lang)
+
     def _set_paper_home(self, root: Path):
         old_home = os.environ.get("PAPER_HOME")
         os.environ["PAPER_HOME"] = str(root / ".paper")
@@ -829,7 +843,7 @@ class PaperCliTests(unittest.TestCase):
                     os.environ["PAPER_HOME"] = old_home
 
 
-class GitHubRemoteConfigTests(unittest.TestCase):
+class GitHubRemoteConfigTests(PaperCliTests):
     def _set_paper_home(self, root: Path):
         old_home = os.environ.get("PAPER_HOME")
         os.environ["PAPER_HOME"] = str(root / ".paper")

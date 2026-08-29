@@ -48,6 +48,15 @@ from paper_runtime.core import (
     save_config,
     set_post_published,
 )
+from paper_runtime.i18n import (
+    LANGUAGE_LABELS,
+    SUPPORTED_LANGUAGES,
+    get_current_language,
+    normalize_locale,
+    resolve_language,
+    set_current_language,
+    t,
+)
 
 VERSION = "0.1.2-beta.3"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
@@ -163,10 +172,10 @@ def _watch_preview(config: PaperConfig, state: _PreviewState, stop: threading.Ev
             build_site(config, include_drafts=True, live_reload=True)
         except Exception as exc:  # keep serving the last good output
             state.error = str(exc)
-            print(f"\n⚠️ 预览重建失败，继续保留上一次结果：{exc}", file=sys.stderr)
+            print(t("serve_rebuild_failed", exc=exc), file=sys.stderr)
         else:
             state.bump()
-            print("\n↻ Markdown 修改已合并更新，浏览器即将自动刷新。")
+            print(t("serve_reloaded"))
         finally:
             pending_since = None
             if refresh_now:
@@ -225,7 +234,7 @@ def _terminal_menu(
             print(f"\n  {title}\n")
             start, end = _menu_window(len(options), selected, reserved_lines=7 + title.count("\n") + bool(footer_message))
             if start:
-                print(f"{GRAY}  ↑ 还有 {start} 项{RESET}")
+                print(f"{GRAY}{t('menu_more_above', count=start)}{RESET}")
             for index in range(start, end):
                 _key, label, description = options[index]
                 active = index == selected
@@ -235,8 +244,8 @@ def _terminal_menu(
                 rendered_desc = f"{TERRACOTTA}{description}{RESET}" if active else f"{GRAY}{description}{RESET}"
                 print(f"{prefix}  {rendered_label}  {rendered_desc}")
             if end < len(options):
-                print(f"{GRAY}  ↓ 还有 {len(options) - end} 项{RESET}")
-            print(f"\n  {GRAY}↑↓ / kj  |  enter 选择  |  数字键直达  |  esc / q 返回{RESET}")
+                print(f"{GRAY}{t('menu_more_below', count=len(options) - end)}{RESET}")
+            print(f"\n  {GRAY}{t('menu_controls_hint')}{RESET}")
             if footer_message:
                 print(f"  {TERRACOTTA}{footer_message}{RESET}")
             sys.stdout.flush()
@@ -282,7 +291,7 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
             print(f"\n  {title}\n")
             start, end = _menu_window(len(options), selected_index, reserved_lines=7 + title.count("\n"))
             if start:
-                print(f"{GRAY}  ↑ 还有 {start} 项{RESET}")
+                print(f"{GRAY}{t('menu_more_above', count=start)}{RESET}")
             for index in range(start, end):
                 key, label, description = options[index]
                 active = index == selected_index
@@ -291,8 +300,8 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
                 rendered = f"{TERRACOTTA}{label}{RESET}" if active else label
                 print(f"{prefix} {rendered}  {GRAY}{description}{RESET}")
             if end < len(options):
-                print(f"{GRAY}  ↓ 还有 {len(options) - end} 项{RESET}")
-            print(f"\n  {GRAY}空格勾选  |  ↑↓ / kj 移动  |  enter 提交  |  esc / q 取消{RESET}")
+                print(f"{GRAY}{t('menu_more_below', count=len(options) - end)}{RESET}")
+            print(f"\n  {GRAY}{t('menu_multiselect_controls')}{RESET}")
             sys.stdout.flush()
             key = _read_terminal_key()
             if key in {"\x1b[A", "k", "K"}:
@@ -316,7 +325,7 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
 def _pause() -> None:
     if not sys.stdin.isatty():
         return
-    input("\n按 Enter 返回菜单……")
+    input(t("pause_prompt"))
 
 
 def _has_config() -> bool:
@@ -332,7 +341,7 @@ def _require_linked(local: bool = False, local_dir: Path | str | None = None) ->
             _error(str(exc))
             return None
     if not _has_config():
-        _error("尚未关联 Markdown 目录。请先执行 paper link，或使用 paper init 创建标准目录。")
+        _error(t("error_not_linked"))
         return None
     try:
         return load_config(create=True)
@@ -345,8 +354,9 @@ def _folder_picker() -> Path | None:
     if sys.platform != "darwin":
         return None
     try:
+        prompt_str = t("choose_posts_folder_prompt").replace('"', '\\"')
         result = subprocess.run(
-            ["osascript", "-e", 'POSIX path of (choose folder with prompt "选择 Paper 文章目录")'],
+            ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt_str}")'],
             check=False,
             capture_output=True,
             text=True,
@@ -360,8 +370,9 @@ def _file_picker() -> Path | None:
     if sys.platform != "darwin":
         return None
     try:
+        prompt_str = t("choose_favicon_prompt").replace('"', '\\"')
         result = subprocess.run(
-            ["osascript", "-e", 'POSIX path of (choose file with prompt "选择 Paper 网站图标")'],
+            ["osascript", "-e", f'POSIX path of (choose file with prompt "{prompt_str}")'],
             check=False,
             capture_output=True,
             text=True,
@@ -375,7 +386,7 @@ def _install_favicon_file(config: PaperConfig, source: Path) -> PaperConfig | No
     allowed = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico"}
     suffix = source.suffix.lower()
     if not source.is_file() or suffix not in allowed:
-        _error("图标文件必须是 SVG、PNG、JPG、WebP 或 ICO", 1)
+        _error(t("favicon_invalid_format"), 1)
         return None
     assets = config.posts_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
@@ -406,7 +417,7 @@ def _app_picker() -> Path | None:
 def _pick_custom_editor(config: PaperConfig) -> PaperConfig:
     source = _app_picker()
     if source is None:
-        raw_path = _prompt("编辑器应用路径或启动命令（留空取消）：")
+        raw_path = _prompt(t("editor_custom_input"))
         if not raw_path:
             return config
         raw_path = raw_path.strip()
@@ -419,7 +430,7 @@ def _pick_custom_editor(config: PaperConfig) -> PaperConfig:
 
     if source_str:
         saved = save_config(config, editor=source_str)
-        print(f"✅ 默认编辑器已设置为：{source_str}")
+        print(t("editor_set", editor=source_str))
         return saved
     return config
 
@@ -438,11 +449,11 @@ def _editor_installed(command: str, app_name: str) -> bool:
 
 
 def _set_highlight_color(config: PaperConfig) -> PaperConfig:
-    value = _prompt(f"高亮颜色 HEX（当前 {config.color}）：")
+    value = _prompt(t("brand_color_prompt", color=config.color))
     if value is None:
         return config
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-        _error("颜色必须是 #D97757 这样的六位 HEX", 1)
+        _error(t("brand_color_hex_error"), 1)
         _pause()
         return config
     return save_config(config, color=value.upper())
@@ -450,12 +461,12 @@ def _set_highlight_color(config: PaperConfig) -> PaperConfig:
 
 def _set_icon(config: PaperConfig) -> PaperConfig:
     icon_action = _terminal_menu(
-        "选择网站品牌图标来源：",
+        t("brand_icon_source_title"),
         [
-            ("default", "default", "恢复 Paper 默认 favicon"),
-            ("file", "file", "复制到文章目录 assets/"),
-            ("paste", "paste", "直接保存图标代码"),
-            ("back", "back", "不修改"),
+            ("default", "default", t("brand_icon_opt_default")),
+            ("file", "file", t("brand_icon_opt_file")),
+            ("paste", "paste", t("brand_icon_opt_paste")),
+            ("back", "back", t("brand_icon_opt_back")),
         ],
     )
     if icon_action == "default":
@@ -463,36 +474,36 @@ def _set_icon(config: PaperConfig) -> PaperConfig:
     if icon_action == "file":
         source = _file_picker()
         if source is None:
-            raw_path = _prompt("图标文件路径（留空取消）：")
+            raw_path = _prompt(t("brand_icon_file_prompt"))
             source = Path(raw_path).expanduser().resolve() if raw_path else None
         if source is not None:
             return _install_favicon_file(config, source) or config
     elif icon_action == "paste":
-        value = _prompt("粘贴一行 SVG、Data URI 或图片 URL：")
+        value = _prompt(t("brand_icon_paste_prompt"))
         if value and ("<svg" in value.lower() or value.startswith(("data:image/", "http://", "https://", "assets/"))):
             return save_config(config, icon=value)
         if value:
-            _error("无法识别图标内容", 1)
+            _error(t("brand_icon_unrecognized"), 1)
             _pause()
     return config
 
 
 def _choose_editor(config: PaperConfig) -> PaperConfig:
     candidates = [
-        ("default", "default", "macOS 默认 Markdown 应用"),
-        ("code", "code", "已安装" if _editor_installed("code", "Visual Studio Code") else "未检测到"),
-        ("cursor", "cursor", "已安装" if _editor_installed("cursor", "Cursor") else "未检测到"),
-        ("typora", "typora", "已安装" if _editor_installed("typora", "Typora") else "未检测到"),
-        ("obsidian", "obsidian", "已安装" if _editor_installed("obsidian", "Obsidian") else "未检测到"),
-        ("custom", "custom", "选择其他应用（打开文件管理器）"),
-        ("back", "back", "不修改"),
+        ("default", "default", t("editor_default_system")),
+        ("code", "code", t("editor_installed") if _editor_installed("code", "Visual Studio Code") else t("editor_not_detected")),
+        ("cursor", "cursor", t("editor_installed") if _editor_installed("cursor", "Cursor") else t("editor_not_detected")),
+        ("typora", "typora", t("editor_installed") if _editor_installed("typora", "Typora") else t("editor_not_detected")),
+        ("obsidian", "obsidian", t("editor_installed") if _editor_installed("obsidian", "Obsidian") else t("editor_not_detected")),
+        ("custom", "custom", t("editor_custom_option")),
+        ("back", "back", t("brand_icon_opt_back")),
     ]
-    editor = _terminal_menu("选择新建文章后自动打开的编辑器：", candidates)
+    editor = _terminal_menu(t("editor_picker_title"), candidates)
     if editor == "custom":
         return _pick_custom_editor(config)
     if editor not in {None, "back"}:
         saved = save_config(config, editor=editor)
-        print(f"✅ 默认编辑器已设置为：{editor}")
+        print(t("editor_set", editor=editor))
         return saved
     return config
 
@@ -500,30 +511,52 @@ def _choose_editor(config: PaperConfig) -> PaperConfig:
 def _set_image_compression(config: PaperConfig, state: str | None = None) -> PaperConfig:
     if state is None:
         state = _terminal_menu(
-            "选择构建图片压缩：",
+            t("compress_menu_title"),
             [
-                ("on", "on", "开启（默认）· 优化发布副本，不修改原图"),
-                ("off", "off", "关闭 · 发布副本保持原始大小"),
-                ("back", "back", "不修改"),
+                ("on", "on", t("compress_opt_on")),
+                ("off", "off", t("compress_opt_off")),
+                ("back", "back", t("brand_icon_opt_back")),
             ],
         )
     if state in {None, "back"}:
         return config
     enabled = state == "on"
     saved = save_config(config, compress=enabled)
-    print(f"✅ 图片压缩已{'开启' if enabled else '关闭'}。")
+    state_label = t("state_on") if enabled else t("state_off")
+    print(t("compress_feedback", state=state_label))
+    return saved
+
+
+def _set_language(config: PaperConfig, lang_code: str | None = None) -> PaperConfig:
+    if lang_code is None:
+        lang_code = _terminal_menu(
+            t("lang_menu_title"),
+            [
+                ("zh_CN", "zh_CN", t("lang_option_zh")),
+                ("en_US", "en_US", t("lang_option_en")),
+                ("auto", "auto", t("lang_option_auto")),
+                ("back", "back", t("cancel")),
+            ],
+        )
+    if lang_code in {None, "back"}:
+        return config
+    norm = "auto" if lang_code.strip().lower() in {"auto", "system", "default"} else normalize_locale(lang_code)
+    saved = save_config(config, language=norm)
+    set_current_language(resolve_language(config_lang=norm))
+    display_label = t("lang_option_auto") if norm == "auto" else LANGUAGE_LABELS.get(norm, norm)
+    print(t("lang_set", lang=display_label))
     return saved
 
 
 def cmd_brand_config(config: PaperConfig) -> int:
     while True:
-        icon_label = "Paper zine 图标" if config.icon.strip() == DEFAULT_ICON else "已自定义"
+        icon_label = t("brand_icon_zine") if config.icon.strip() == DEFAULT_ICON else t("brand_icon_customized")
         action = _terminal_menu(
-            "🏠 Home · 首页与品牌\n（使用 ↑/↓ 移动，enter 确认，esc 返回上一级）",
+            t("brand_menu_title"),
             [
-                ("color", "color", f"当前 [{config.color}]"),
-                ("icon", "icon", f"{icon_label} / 文件 / 粘贴代码"),
-                ("back", "back", "返回配置上级"),
+                ("color", "color", t("brand_current_color", color=config.color)),
+                ("icon", "icon", t("brand_icon_desc", icon_label=icon_label)),
+                ("back", "back", t("brand_back_to_config")),
             ],
         )
         if action in {None, "back"}:
@@ -539,6 +572,7 @@ def cmd_config(
     home_cmd: str | None = None,
     compress_cmd: str | None = None,
     editor_name: str | None = None,
+    lang_code: str | None = None,
     local: bool = False,
     local_dir: Path | str | None = None,
 ) -> int:
@@ -546,36 +580,42 @@ def cmd_config(
     if config is None:
         return 2
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code)
     if not sys.stdin.isatty():
-        pages = "（未配置远程）"
+        pages = t("pages_need_remote")
         if config.git_remote:
             info = normalize_git_remote(config.git_remote)
             if info:
                 pages = info.pages_url
         print(
-            f"文章目录：{config.posts_dir}\n编辑器：{config.editor}\n高亮颜色：{config.color}\n"
-            f"网站图标：{'已配置' if config.icon else '未配置'}\n"
-            f"图片压缩：{'已开启' if config.compress else '已关闭'}\nGit 远程：{config.git_remote or '未配置'}\n"
-            f"Pages 地址：{pages}"
+            f"{t('status_posts_dir', path=config.posts_dir)}\n"
+            f"{t('config_item_editor')}：{config.editor}\n"
+            f"{t('brand_item_color')}：{config.color}\n"
+            f"{t('brand_item_icon')}：{t('status_out_exists') if config.icon else t('status_not_set')}\n"
+            f"{t('config_item_compress')}：{t('state_on') if config.compress else t('state_off')}\n"
+            f"{t('config_item_language')}：{config.language}\n"
+            f"{t('status_remote', remote=config.git_remote or t('status_not_set'))}\n"
+            f"{t('status_pages_url', url=pages)}"
         )
         return 0
     while True:
         _state, readiness_label = _deployment_readiness(config)
         remote_info = normalize_git_remote(config.git_remote)
-        title_prefix = "⚙️ Paper Config" + (f"（当前目录模式：{Path(local_dir or '.').resolve().name}）" if (local or local_dir is not None) else "")
+        title_prefix = t("config_menu_title") + (t("config_mode_prefix", dir_name=Path(local_dir or '.').resolve().name) if (local or local_dir is not None) else "")
+        lang_display = t("lang_option_auto") if config.language == "auto" else LANGUAGE_LABELS.get(normalize_locale(config.language), config.language)
         action = _terminal_menu(
             title_prefix,
             [
-                ("home", "home", "高亮颜色 / Favicon 图标"),
-                ("compress", "compress", f"图片压缩 · {'已开启' if config.compress else '已关闭'}"),
-                ("editor", "editor", f"当前 {config.editor}"),
+                ("home", "home", t("config_item_brand_desc")),
+                ("compress", "compress", f"{t('config_item_compress')} · {t('state_on') if config.compress else t('state_off')}"),
+                ("editor", "editor", t("config_current_editor", editor=config.editor)),
+                ("language", "language", t("config_current_language", lang=lang_display)),
                 ("link", "link", str(config.posts_dir)),
-                ("remote", "remote", f"当前 {remote_info.owner}/{remote_info.repo} · 点入可重新绑定" if remote_info else "未配置 · 引导创建仓库"),
-                ("pages", "pages", "Pages 地址 / 自定义域名"),
-                ("test", "test", "检查 Git 与远程可达性"),
-                ("status", "status", f"路径 / 仓库 / 部署（{readiness_label}）"),
-                ("back", "back", "返回主菜单"),
+                ("remote", "remote", t("config_remote_bound", owner=remote_info.owner, repo=remote_info.repo) if remote_info else t("config_remote_not_configured")),
+                ("pages", "pages", t("config_item_pages_desc")),
+                ("test", "test", t("config_item_test_desc")),
+                ("status", "status", t("config_item_status_desc", readiness=readiness_label)),
+                ("back", "back", t("config_item_back")),
             ],
         )
         if action in {None, "back"}:
@@ -587,6 +627,8 @@ def cmd_config(
             config = _set_image_compression(config)
         elif action == "editor":
             config = _choose_editor(config)
+        elif action == "language":
+            config = _set_language(config)
         elif action == "link":
             cmd_link(None)
             config = _require_linked(local=local, local_dir=local_dir) or config
@@ -611,6 +653,7 @@ def _run_config_leaf(
     home_cmd: str | None,
     compress_cmd: str | None,
     editor_name: str | None = None,
+    lang_code: str | None = None,
 ) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
     if config_cmd == "home":
@@ -627,9 +670,12 @@ def _run_config_leaf(
                 _pick_custom_editor(config)
             else:
                 save_config(config, editor=editor_name)
-                print(f"✅ 默认编辑器已设置为：{editor_name}")
+                print(t("editor_set", editor=editor_name))
             return 0
         _choose_editor(config)
+        return 0
+    if config_cmd in {"lang", "language"}:
+        _set_language(config, lang_code or editor_name)
         return 0
     if config_cmd == "compress":
         _set_image_compression(config, compress_cmd)
@@ -649,7 +695,7 @@ def _run_config_leaf(
     if config_cmd == "status":
         _clear_screen()
         return cmd_status()
-    return _error(f"未知的 config 子命令：{config_cmd}", 1)
+    return _error(t("config_unknown_subcmd", cmd=config_cmd), 1)
 
 
 def _deployment_readiness(config: PaperConfig) -> tuple[str, str]:
@@ -660,21 +706,21 @@ def _deployment_readiness(config: PaperConfig) -> tuple[str, str]:
     """
 
     if _has_github_pages_actions(config.site_dir):
-        return "actions", "GitHub Actions 自动构建"
+        return "actions", t("readiness_actions")
     if not config.git_remote:
-        return "not-configured", "未配置"
+        return "not-configured", t("readiness_not_configured")
     info = normalize_git_remote(config.git_remote)
     if info is None or shutil.which("git") is None:
-        return "unverified", "未校验"
+        return "unverified", t("readiness_unverified")
     if not (config.site_dir / ".git").exists():
-        return "unverified", "未校验"
+        return "unverified", t("readiness_unverified")
     origin = _managed_origin(config)
     if origin is None or origin != info.ssh_url:
-        return "unverified", "未校验"
+        return "unverified", t("readiness_unverified")
     local = _git(config, "rev-parse", "--verify", "--quiet", "refs/heads/gh-pages", capture=True)
     if local.returncode == 0:
-        return "pushed", "已推送"
-    return "ready", "已就绪"
+        return "pushed", t("readiness_pushed")
+    return "ready", t("readiness_ready")
 
 
 def _gh_pages_pushed(config: PaperConfig) -> bool:
@@ -715,7 +761,8 @@ def _confirm_or_skip(message: str) -> bool:
     return key in {"\r", "\n"}
 
 
-_WIZARD_STEPS = ("创建仓库", "粘贴地址", "核对保存", "发布开启")
+def _wizard_steps() -> list[str]:
+    return [t("wizard_step1_name"), t("wizard_step2_name"), t("wizard_step3_name"), t("wizard_step4_name")]
 
 
 def _strip_ansi(text: str) -> str:
@@ -733,7 +780,8 @@ def _wizard_header(current: int) -> None:
     with the active number highlighted. Only the active marker moves between
     steps — the screen is redrawn in place, never appended downward."""
     parts = []
-    for index, name in enumerate(_WIZARD_STEPS, start=1):
+    steps = _wizard_steps()
+    for index, name in enumerate(steps, start=1):
         if index < current:
             parts.append(f"{GREEN}✓ {index} {name}{RESET}")
         elif index == current:
@@ -782,30 +830,29 @@ def _confirm_and_save_remote(config: PaperConfig, info: GitRemoteInfo) -> PaperC
     """
     origin = _managed_origin(config)
     body: list[tuple[str, str]] = [
-        ("hint", "保存后发布将推送到该仓库。请核对："),
-        ("content", f"仓库所有者：{info.owner}"),
-        ("content", f"仓库名称：{info.repo}"),
-        ("content", f"Remote URL：{info.ssh_url}"),
-        ("content", f"预期 Pages URL：{info.pages_url}"),
+        ("hint", t("wizard_verify_hint")),
+        ("content", t("wizard_verify_owner", owner=info.owner)),
+        ("content", t("wizard_verify_repo", repo=info.repo)),
+        ("content", t("wizard_verify_remote", url=info.ssh_url)),
+        ("content", t("wizard_verify_pages", pages_url=info.pages_url)),
     ]
     if origin and origin != info.ssh_url:
-        body.append(("hint", f"⚠️ 当前托管 origin：{origin}（与将要保存的不一致）"))
-    _wizard_screen(3, "核对保存", body)
-    if not _confirm_or_skip("\n按 Enter 确认保存 · 按 Space 跳过："):
-        print("  ⏭ 已跳过，未修改任何配置。")
+        body.append(("hint", t("wizard_origin_mismatch_warning", origin=origin)))
+    _wizard_screen(3, t("wizard_step3_name"), body)
+    if not _confirm_or_skip(t("wizard_confirm_save_prompt")):
+        print(t("wizard_save_skipped"))
         return None
     if origin and origin != info.ssh_url:
-        answer = _prompt("origin 不一致，输入 YES 替换托管仓库 origin（其他内容取消）：")
+        answer = _prompt(t("wizard_replace_origin_prompt"))
         if answer != "YES":
-            print("  ⏭ 已取消，未修改任何配置。")
+            print(t("wizard_save_cancelled"))
             return None
     saved = save_config(config, git_remote=info.ssh_url)
-    result = _with_spinner("正在绑定托管仓库 origin ……", _bind_managed_origin, saved, info.ssh_url)
-    _, message = result if isinstance(result, tuple) else (False, "绑定托管仓库 origin 失败。")
+    result = _with_spinner(t("wizard_binding_origin_spinner"), _bind_managed_origin, saved, info.ssh_url)
+    _, message = result if isinstance(result, tuple) else (False, t("wizard_bind_origin_failed"))
     if message:
         print(f"⚠️ {message}")
-    print(f"✅ 已保存 GitHub 远程：{info.ssh_url}")
-    print(f"   预期站点：{info.pages_url}")
+    print(t("remote_saved", remote=info.ssh_url, site_url=info.pages_url))
     return saved
 
 
@@ -834,43 +881,43 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     """
 
     if shutil.which("git") is None:
-        _error("未找到 Git。请先安装 Git（macOS：brew install git），再来配置 GitHub 远程。", 1)
+        _error(t("wizard_git_missing_error"), 1)
         _pause()
         return config
     existing = normalize_git_remote(config.git_remote)
 
     if existing:
-        _wizard_screen(1, "创建仓库", [
-            ("content", f"当前已绑定：{existing.owner}/{existing.repo}"),
-            ("hint", "无需新建仓库，直接进入第 2 步粘贴新地址即可换绑。"),
+        _wizard_screen(1, t("wizard_step1_name"), [
+            ("content", t("wizard_step1_bound", owner=existing.owner, repo=existing.repo)),
+            ("hint", t("wizard_step1_bound_hint")),
         ])
     else:
         opened = _open_browser("https://github.com/new")
         open_hint = (
-            "已为你打开 GitHub 新建仓库页，在浏览器里新建一个仓库。"
+            t("wizard_step1_open_success")
             if opened
-            else "未能自动打开浏览器 —— 请手动打开 https://github.com/new 新建一个仓库。"
+            else t("wizard_step1_open_fail")
         )
-        _wizard_screen(1, "创建仓库", [
+        _wizard_screen(1, t("wizard_step1_name"), [
             ("hint", open_hint),
-            ("hint", "· 仓库名决定博客地址：用户名.github.io → 根路径；其它 → /仓库名 子路径"),
-            ("hint", "· 可见性选 Public；已有仓库可跳过本步，直接粘贴地址。"),
+            ("hint", t("wizard_step1_hint_subpath")),
+            ("hint", t("wizard_step1_hint_public")),
         ])
-        _confirm_or_skip("\n  按 Enter 继续 · 按 Space 跳过（已有仓库直接粘贴）：")
+        _confirm_or_skip(t("wizard_step1_continue_prompt"))
 
-    _wizard_screen(2, "粘贴地址", [
-        ("hint", "支持三种写法（任选其一）："),
+    _wizard_screen(2, t("wizard_step2_name"), [
+        ("hint", t("wizard_step2_formats_hint")),
         ("content", "git@github.com:用户名/仓库.git"),
         ("content", "https://github.com/用户名/仓库"),
         ("content", "用户名/仓库"),
     ])
     while True:
-        raw = _prompt("  仓库地址（留空取消）：")
+        raw = _prompt(t("wizard_enter_remote_prompt"))
         if raw is None or not raw:
             return config
         info = normalize_git_remote(raw)
         if info is None:
-            _error("无法识别的 GitHub 仓库地址，请参考上面的三种写法重新输入", 1)
+            _error(t("wizard_remote_invalid"), 1)
             _pause()
             continue
         break
@@ -880,82 +927,82 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
         return config
     config = result
 
-    _wizard_screen(4, "发布开启", [
-        ("hint", "gh-pages 分支要等你发布之后才存在，所以顺序是：先发布，再开启 Pages。"),
+    _wizard_screen(4, t("wizard_step4_name"), [
+        ("hint", t("wizard_step4_desc")),
     ])
-    if _confirm_or_skip("\n  现在发布并推送 gh-pages 吗？按 Enter 发布 · 按 Space 跳过："):
+    if _confirm_or_skip(t("wizard_step4_publish_prompt")):
         cmd_publish(all_posts=False, slugs=[])
         if _gh_pages_pushed(config):
-            print("  ✅ 已推送 gh-pages —— 设置页里现在可以选到它了。")
+            print(f"  {t('wizard_pushed_gh_pages')}")
         else:
-            print("  ⚠️ 尚未推送 gh-pages（刚才可能没有勾选草稿）。")
-            if _confirm_or_skip("  要把当前站点（首页 + 已发布内容）先推上去吗？按 Enter 推送 · 按 Space 跳过："):
+            print(t("wizard_step4_not_pushed_yet"))
+            if _confirm_or_skip(t("wizard_step4_push_all_prompt")):
                 try:
-                    _with_spinner("正在构建站点 ……", build_site, config)
+                    _with_spinner(t("publish_rebuilding"), build_site, config)
                     pushed = cmd_deploy() == 0
                 except Exception:
                     pushed = False
-                print("  ✅ 已推送 gh-pages。" if pushed else "  ⚠️ 推送未成功，稍后执行 paper publish 重试。")
+                print(t("wizard_step4_pushed_ok") if pushed else t("wizard_step4_push_failed"))
     else:
-        print("  ⏭ 已跳过发布。之后执行 paper publish，推送 gh-pages 后再来开启 Pages。")
+        print(t("wizard_skipped_publish"))
     print(f"\n  设置页：{info.pages_settings_url}")
-    if _confirm_or_skip("  现在打开设置页选 gh-pages 吗？按 Enter 打开 · 按 Space 跳过："):
+    if _confirm_or_skip(t("wizard_step4_open_settings_prompt")):
         opened = _open_browser(info.pages_settings_url)
-        print(f"  {'已为你打开' if opened else '未能自动打开'}设置页。")
-        print("  ⚠️ 若下拉框里没有 gh-pages，说明还没推送成功 —— 稍后执行 paper publish 再回来刷新。")
+        print(f"  {t('wizard_settings_opened') if opened else t('wizard_settings_open_fail')}")
+        print(t("wizard_step4_settings_warning"))
     else:
-        print("  ⏭ 已跳过。发布后打开上面的设置页，在「Deploy from a branch」选 gh-pages 并保存。")
-    print("\n  ✅ 配置完成。之后用 paper publish 发布，用 paper serve 本地预览。")
+        print(f"  ⏭ {t('wizard_settings_skipped', url=info.pages_settings_url)}")
+    print(f"\n  {t('wizard_done')}")
     _pause()
     return config
 
 
 def cmd_pages_url(config: PaperConfig) -> PaperConfig:
     info = normalize_git_remote(config.git_remote) if config.git_remote else None
-    derived = info.pages_url if info else "（需先配置 GitHub 远程）"
-    print(f"推导的 Pages 地址：{derived}")
-    print(f"当前站点地址（siteUrl）：{config.site_url or '未设置 —— 构建时自动使用推导值'}")
+    derived = info.pages_url if info else t("pages_need_remote")
+    print(t("pages_derived_url", url=derived))
+    print(t("pages_current_site_url", url=config.site_url or t("pages_site_url_unset")))
     try:
-        raw = input("自定义站点地址（留空清除自定义，恢复自动推导）：").strip()
+        raw = input(t("pages_custom_prompt")).strip()
     except (EOFError, KeyboardInterrupt):
-        print("已取消。")
+        print(t("pages_cancelled"))
         return config
     return save_config(config, site_url=raw)
 
 
 def cmd_test_connection(config: PaperConfig) -> int:
     if shutil.which("git") is None:
-        return _error("系统未找到 Git。")
+        return _error(t("test_git_missing"))
     info = normalize_git_remote(config.git_remote) if config.git_remote else None
     if info is None:
-        return _error("尚未配置有效的 GitHub 远程，请先在「GitHub 远程」设置。")
-    print(f"测试远程：{info.ssh_url}")
+        return _error(t("test_remote_unconfigured"))
+    print(t("test_testing_remote_prefix", remote=info.ssh_url))
     result = _run_with_spinner(
-        "正在连接远程仓库 ……",
+        t("test_connecting_spinner"),
         ["git", "ls-remote", info.ssh_url, "HEAD"],
         timeout=10,
     )
     if result is None:
-        return _error("连接超时（>10 秒）。请检查网络与 SSH 认证。")
+        return _error(t("test_timeout_error"))
     if result.returncode != 0:
         if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
-        return _error("远程不可达或认证失败。")
-    print("✅ Git 可用，远程仓库可达。")
+          print(result.stderr.strip(), file=sys.stderr)
+        return _error(t("test_remote_unreachable_error"))
+    print(t("test_connection_ok"))
     return 0
 
 
 def cmd_link(path_arg: str | None) -> int:
     target = Path(path_arg).expanduser().resolve() if path_arg else _folder_picker()
     if target is None and not sys.stdin.isatty():
-        return _error("非交互环境必须传入文章目录，例如 paper link ~/Documents/Paper/posts")
+        return _error(t("link_noninteractive_error"))
     if target is None:
         try:
-            answer = input("文章目录绝对路径（留空取消）：").strip()
+            answer = input(t("link_prompt")).strip()
         except (EOFError, KeyboardInterrupt):
-            return _error("已取消关联", 1)
+            return _error(t("link_cancelled"), 1)
         if not answer:
-            return _error("已取消关联", 1)
+            return _error(t("link_cancelled"), 1)
         target = Path(answer).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     try:
@@ -963,7 +1010,7 @@ def cmd_link(path_arg: str | None) -> int:
     except ConfigError as exc:
         return _error(str(exc))
     save_config(config, posts_dir=target)
-    print(f"✅ 已关联文章目录：{target}")
+    print(t("link_linked", path=target))
     return 0
 
 
@@ -1036,16 +1083,16 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
     mode = "local" if (local or local_dir is not None) else None
     if mode is None:
         if is_tty:
-            print(f"\n{TERRACOTTA}{BOLD}📖 欢迎使用 Paper 博客系统初始化向导{RESET}\n")
+            print(f"\n{TERRACOTTA}{BOLD}{t('init_welcome_header')}{RESET}\n")
             chosen_mode = _terminal_menu(
-                "请选择博客初始化模式：",
+                t("init_mode_choose"),
                 [
-                    ("global", "global", "全局模式（推荐：随时随地输入 paper 写作，文章存于统一文档库，全局托管）"),
-                    ("local", "local", "当前目录模式（项目工程：基于当前目录生成 .paper-config.json，文章保存在 ./posts）"),
+                    ("global", "global", t("init_mode_global")),
+                    ("local", "local", t("init_mode_local")),
                 ],
             )
             if chosen_mode is None:
-                print("已取消初始化。")
+                print(t("init_cancelled"))
                 return 0
             mode = chosen_mode
         else:
@@ -1058,24 +1105,25 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
     already_init, existing_cfg = _is_already_initialized(is_local, target_dir)
     if already_init and existing_cfg:
         posts = discover_posts(existing_cfg.posts_dir)
-        print(f"\n💡 检测到该环境已初始化过 Paper：")
-        print(f"  · 模式：{'当前目录模式' if is_local else '全局模式'}")
-        print(f"  · 文章目录：{existing_cfg.posts_dir}（已有 {len(posts)} 篇文章）")
-        print(f"  · 托管目录：{existing_cfg.site_dir}")
+        print(f"\n💡 {t('init_detected_existing')}")
+        mode_str = t("init_mode_label_local") if is_local else t("init_mode_label_global")
+        print(f"  · {t('cli_description')}：{mode_str}")
+        print(f"  · {t('status_posts_dir', path=existing_cfg.posts_dir)}（{t('init_posts_count', count=len(posts))}）")
+        print(f"  · {t('status_site_dir', path=existing_cfg.site_dir)}")
         if existing_cfg.git_remote:
-            print(f"  · Git 远程：{existing_cfg.git_remote}")
-        print(f"  · 静态输出：{'已生成' if existing_cfg.output_dir.exists() else '未生成'}\n")
+            print(f"  · {t('status_remote', remote=existing_cfg.git_remote)}")
+        print(f"  · {t('status_static_out', status=t('status_out_exists') if existing_cfg.output_dir.exists() else t('status_out_not_built'))}\n")
 
         if not is_tty:
             return 0
 
         action = _terminal_menu(
-            "请选择接下来的操作：",
+            t("init_action_choose"),
             [
-                ("serve", "serve", "🚀 启动本地热更新预览（paper serve）"),
-                ("new", "new", "📝 新建文章草稿并在编辑器打开（paper new）"),
-                ("reinit", "reinit", "🔄 重新运行初始化向导（更新配置与关联）"),
-                ("exit", "exit", "🚪 退出"),
+                ("serve", "serve", t("init_op_serve")),
+                ("new", "new", t("init_op_new")),
+                ("reinit", "reinit", t("init_op_reinit")),
+                ("exit", "exit", t("init_op_exit")),
             ],
         )
         if action == "serve":
@@ -1083,7 +1131,7 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
         elif action == "new":
             return cmd_new(None, local=is_local, local_dir=target_dir)
         elif action in {"exit", None}:
-            print("已退出。")
+            print(t("init_exited"))
             return 0
         # 选择 reinit 则继续向下执行向导重设
 
@@ -1091,8 +1139,8 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
     if is_local:
         config = load_local_config(target_dir or ".")
         posts_dir = config.posts_dir
-        print(f"\n📁 【当前目录模式】工程目录：{config.site_dir}")
-        print(f"📁 文章存放目录：{posts_dir}")
+        print(f"\n📁 【{t('init_mode_label_local')}】{t('status_site_dir', path=config.site_dir)}")
+        print(f"📁 {t('status_posts_dir', path=posts_dir)}")
     else:
         try:
             config = load_config()
@@ -1101,7 +1149,7 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
 
         default_dir_str = str(config.posts_dir or DEFAULT_POSTS_DIR)
         if is_tty:
-            ans = _prompt(f"\n📁 请确认文章保存路径 [默认: {default_dir_str}]（直接 Enter 确认）：")
+            ans = _prompt(t("init_confirm_path_prompt", path=default_dir_str))
             posts_dir = Path(ans).expanduser().resolve() if ans else Path(default_dir_str).expanduser().resolve()
         else:
             posts_dir = Path(default_dir_str).expanduser().resolve()
@@ -1109,19 +1157,19 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
 
     # 4. 初始文章脚手架
     _seed_initial_posts(posts_dir, site_name=config.site_name)
-    print(f"✅ 文章库已就绪：{posts_dir}")
+    print(t("init_posts_ready", path=posts_dir))
 
     # 5. 编辑器偏好设置（交互模式）
     if is_tty:
         editor_choice = _terminal_menu(
-            f"✍️ 请选择常用写作编辑器（当前: {config.editor}）：",
+            t("init_choose_editor", editor=config.editor),
             [
                 ("obsidian", "obsidian", "Obsidian"),
                 ("typora", "typora", "Typora"),
                 ("vscode", "vscode", "Visual Studio Code"),
                 ("cursor", "cursor", "Cursor"),
-                ("default", "default", "系统默认 Markdown 应用"),
-                ("custom", "custom", "选择其他应用（打开文件管理器）"),
+                ("default", "default", t("editor_default_system")),
+                ("custom", "custom", t("editor_custom_option")),
             ],
         )
         if editor_choice == "custom":
@@ -1131,38 +1179,36 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
 
     # 6. GitHub 关联引导
     if is_local and config.git_remote:
-        print(f"🔗 已自动关联 Git 远程仓库：{config.git_remote}")
+        print(t("init_auto_linked_remote", remote=config.git_remote))
         info = normalize_git_remote(config.git_remote)
         if info:
-            print(f"🌐 站点 Pages 地址：{info.pages_url}")
+            print(t("init_pages_url", url=info.pages_url))
     elif is_tty:
-        remote_prompt = "🔗 配置 GitHub 远程仓库（例如 git@github.com:username/blog.git，直接 Enter 跳过）："
-        ans_remote = _prompt(remote_prompt)
+        ans_remote = _prompt(t("init_remote_prompt"))
         if ans_remote:
             info = normalize_git_remote(ans_remote)
             if info:
                 config = save_config(config, git_remote=info.ssh_url)
-                print(f"✅ 已关联远程仓库：{info.ssh_url}")
-                print(f"🌐 站点 Pages 地址：{info.pages_url}")
+                print(t("remote_saved", remote=info.ssh_url, site_url=info.pages_url))
                 _bind_managed_origin(config, info.ssh_url)
             else:
-                print("⚠️ 仓库地址格式无法识别，已跳过关联，后续可在设置中随时配置。")
+                print(t("init_remote_invalid"))
 
     # 7. 首次静态构建
     try:
-        _with_spinner("正在进行首次站点构建 ……", build_site, config)
-        print(f"✅ 站点初始构建完成！产物输出目录：{config.output_dir}")
+        _with_spinner(t("init_building_site"), build_site, config)
+        print(t("init_build_done", path=config.output_dir))
     except Exception as exc:
-        print(f"⚠️ 初始构建提示：{exc}")
+        print(t("init_build_hint", error=exc))
 
     # 8. 完成向导与后续行动
     if is_tty:
         next_action = _terminal_menu(
-            "\n🎉 Paper 初始化全部就绪！请选择接下来的操作：",
+            t("init_done_title"),
             [
-                ("serve", "serve", "🚀 启动本地热更新预览（在浏览器查看博客效果）"),
-                ("publish", "publish", "🌐 立即同步发布到 GitHub Pages"),
-                ("exit", "exit", "🚪 完成并退出"),
+                ("serve", "serve", t("init_done_serve")),
+                ("publish", "publish", t("init_done_publish")),
+                ("exit", "exit", t("init_done_exit")),
             ],
         )
         if next_action == "serve":
@@ -1170,12 +1216,12 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
         elif next_action == "publish":
             return cmd_publish(False, [], local=is_local, local_dir=target_dir)
 
-    print("\n💡 常用命令指引：")
+    print(t("init_quick_start_title"))
     cmd_prefix = f"paper -l" if is_local else "paper"
-    print(f"  · {cmd_prefix} new \"文章标题\"   新建草稿并在编辑器中打开")
-    print(f"  · {cmd_prefix} serve            启动本地热更新预览")
-    print(f"  · {cmd_prefix} publish          勾选草稿并发布上线")
-    print(f"  · {cmd_prefix}                  打开交互控制台面板\n")
+    print(f"  · {cmd_prefix} new \"Title\"")
+    print(f"  · {cmd_prefix} serve")
+    print(f"  · {cmd_prefix} publish")
+    print(f"  · {cmd_prefix}\n")
     return 0
 
 
@@ -1223,7 +1269,7 @@ def _open_editor(path: Path, config: PaperConfig) -> None:
         elif raw_editor:
             subprocess.Popen([raw_editor, str(path)])
     except OSError as exc:
-        print(f"⚠️ 无法打开编辑器，文章已创建：{exc}")
+        print(f"⚠️ {exc}")
 
 
 def cmd_new(title: str | None, local: bool = False, local_dir: Path | str | None = None) -> int:
@@ -1232,27 +1278,27 @@ def cmd_new(title: str | None, local: bool = False, local_dir: Path | str | None
         return 2
     if not title:
         if not sys.stdin.isatty():
-            return _error("非交互环境必须传入标题，例如 paper new 'Hello Paper'")
+            return _error(t("new_post_noninteractive"))
         try:
-            title = input("文章标题：").strip()
+            title = input(t("new_post_prompt")).strip()
         except (EOFError, KeyboardInterrupt):
-            return _error("已取消新建", 1)
+            return _error(t("new_post_cancelled"), 1)
     if not title:
-        return _error("标题不能为空", 1)
+        return _error(t("new_post_title_empty"), 1)
     if any(character in title for character in "\r\n"):
-        return _error("标题不能包含换行", 1)
+        return _error(t("new_post_title_newline"), 1)
     target = config.posts_dir / f"{_slug(title)}.md"
     if target.exists():
-        return _error(f"文章已存在：{target.name}", 1)
+        return _error(t("new_post_exists", filename=target.name), 1)
     today = dt.date.today().isoformat()
     target.parent.mkdir(parents=True, exist_ok=True)
     # 不写 title：默认用文件名作为展示标题；需要时再手动在 frontmatter 加 title。
     target.write_text(
-        f'---\ndate: {today}\npublished: false\n---\n\n写下你的随想……\n',
+        f'---\ndate: {today}\npublished: false\n---\n\n...\n',
         encoding="utf-8",
     )
     _open_editor(target, config)
-    print(f"✅ 已创建草稿：{target}")
+    print(t("new_post_created", path=target))
     return 0
 
 
@@ -1292,7 +1338,7 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         for post in posts:
             marker = "🟢" if post.published else "⚪"
-            homepage = "（首页）" if post.slug == "__home__" else ""
+            homepage = t("list_home_tag") if post.slug == "__home__" else ""
             print(f"{marker}  {post.modified_date}  {post.title}{homepage}")
         return 0
 
@@ -1302,11 +1348,11 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
             (
                 post.slug,
                 f"{'🟢' if post.published else '⚪'} {post.modified_date}",
-                f"{post.title}{'（首页）' if post.slug == '__home__' else ''}",
+                f"{post.title}{t('list_home_tag') if post.slug == '__home__' else ''}",
             )
             for post in posts
-        ] + [("back", "返回", "返回主菜单")]
-        header = "📄 Paper 文章控制台（🟢 已上线　⚪ 草稿或已下线）" + (f"（当前目录模式：{Path(local_dir or '.').resolve().name}）" if (local or local_dir is not None) else "")
+        ] + [("back", t("back"), t("config_item_back"))]
+        header = t("list_console_header") + (t("config_mode_prefix", dir_name=Path(local_dir or '.').resolve().name) if (local or local_dir is not None) else "")
         selected = _terminal_menu(header, options)
         if selected in {None, "back"}:
             return 0
@@ -1315,10 +1361,10 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
             continue
         if post.slug == "__home__":
             action = _terminal_menu(
-                f"首页操作：{post.title}",
+                t("list_home_op_title", title=post.title),
                 [
-                    ("edit", "编辑首页", "使用默认编辑器打开 index.md"),
-                    ("back", "返回", "返回文章列表"),
+                    ("edit", t("list_home_op_edit"), t("list_home_op_edit_desc")),
+                    ("back", t("back"), t("posts_title")),
                 ],
             )
             if action == "edit":
@@ -1327,12 +1373,12 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
                 _open_editor(post.source_path, config)
             continue
         action = _terminal_menu(
-            f"文章操作：{post.title}",
+            t("post_operation_title", title=post.title),
             [
-                ("edit", "编辑", "使用默认编辑器打开 Markdown"),
-                ("archive" if post.published else "publish", "下架" if post.published else "发布", "重新构建站点"),
-                ("delete", "删除", "移动到废纸篓，可恢复"),
-                ("back", "返回", "返回文章列表"),
+                ("edit", t("post_op_edit"), t("list_post_op_edit_desc")),
+                ("archive" if post.published else "publish", t("list_post_op_archive") if post.published else t("list_post_op_publish"), t("list_post_op_rebuild_desc")),
+                ("delete", t("post_op_delete"), t("list_post_op_delete_desc")),
+                ("back", t("back"), t("posts_title")),
             ],
         )
         if action == "edit":
@@ -1343,10 +1389,10 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
         elif action == "archive":
             set_post_published(post.source_path, False)
             build_site(config)
-            print(f"✅ 已下架：{post.title}")
+            print(t("list_post_archived", title=post.title))
             _pause()
         elif action == "delete":
-            confirmation = input(f"将《{post.title}》移动到废纸篓？按 Enter 确认删除（输入任意内容取消）：").strip()
+            confirmation = input(t("list_post_delete_confirm_prompt", title=post.title)).strip()
             if confirmation:
                 continue
             trash_dir = Path.home() / ".Trash" if sys.platform == "darwin" else config.site_dir / ".trash"
@@ -1358,7 +1404,7 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
                 counter += 1
             shutil.move(str(post.source_path), str(target))
             build_site(config)
-            print(f"✅ 已移动到废纸篓：{target}")
+            print(t("list_post_trash_moved", target=target))
             _pause()
 
 
@@ -1367,7 +1413,7 @@ def cmd_build(preview: bool = False, local: bool = False, local_dir: Path | str 
     if config is None:
         return 2
     output = build_site(config, include_drafts=preview)
-    print(f"✅ 已生成静态站点：{output}")
+    print(t("build_generated", path=output))
     return 0
 
 
@@ -1447,18 +1493,18 @@ def cmd_serve(port: int = 8000, local: bool = False, local_dir: Path | str | Non
             server = _PreviewServer(("127.0.0.1", port), handler)
         except OSError:
             server = _PreviewServer(("127.0.0.1", 0), handler)
-            print(f"⚠️ 端口 {port} 已被占用，已改用随机端口。")
+            print(t("serve_port_occupied", port=port))
         with server:
             actual_port = server.server_address[1]
             preview_path = f"{base_path}/" if base_path else "/"
             preview_url = f"http://127.0.0.1:{actual_port}{preview_path}"
-            print(f"🌐 Paper 预览（包含草稿，仅本机可访问）：{preview_url}")
+            print(t("serve_banner", url=preview_url))
             opened = _open_browser(preview_url)
-            print("已在默认浏览器中打开。" if opened else "未能自动打开浏览器，请复制上方地址。")
+            print(t("serve_browser_opened") if opened else t("serve_browser_failed"))
             try:
                 server.serve_forever()
             except KeyboardInterrupt:
-                print("\n已停止预览。")
+                print(t("serve_stopped_hint"))
     finally:
         stop_watcher.set()
         preview_state.refresh_requested.set()
@@ -1569,10 +1615,10 @@ def _managed_origin(config: PaperConfig) -> str | None:
 def _bind_managed_origin(config: PaperConfig, url: str) -> tuple[bool, str | None]:
     """Bind the managed repository's origin to a canonical remote, locally only."""
     if shutil.which("git") is None:
-        return False, "未找到 Git，托管仓库 origin 未绑定（配置已保存）。"
+        return False, t("test_git_missing")
     config.site_dir.mkdir(parents=True, exist_ok=True)
     if not (config.site_dir / ".git").exists() and _git(config, "init").returncode != 0:
-        return False, "无法初始化托管仓库。"
+        return False, t("deploy_init_failed")
     current = _managed_origin(config)
     if current == url:
         return True, None
@@ -1581,7 +1627,7 @@ def _bind_managed_origin(config: PaperConfig, url: str) -> tuple[bool, str | Non
     else:
         ok = _git(config, "remote", "set-url", "origin", url).returncode == 0
     if not ok:
-        return False, "无法绑定托管仓库 origin。"
+        return False, t("deploy_bind_remote_failed")
     return True, None
 
 
@@ -1590,88 +1636,84 @@ def cmd_deploy(local: bool = False, local_dir: Path | str | None = None) -> int:
     if config is None:
         return 2
     if _has_github_pages_actions(config.site_dir):
-        print("💡 检测到当前仓库已配置 GitHub Actions 自动化部署（.github/workflows/deploy.yml）。")
-        print("   本地静态输出已生成到 ./out。只需将代码变更推送到 GitHub 远程仓库，Actions 会自动构建上线：")
-        print("   git add . && git commit -m \"publish: update posts\" && git push\n")
+        print(t("deploy_actions_intro"))
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             return 0
-        confirmed = _confirm_or_skip("🚀 按 Enter 立即执行提交并推送到 GitHub，按其他任意键取消：")
+        confirmed = _confirm_or_skip(t("deploy_actions_confirm_prompt"))
         if not confirmed:
-            print("已取消自动推送。后续可手动推送更新。")
+            print(t("deploy_actions_cancelled"))
             return 0
         if shutil.which("git") is None:
-            return _error("系统未找到 Git，无法自动推送。")
-        print("  · 暂存本地改动……")
+            return _error(t("deploy_git_missing"))
+        print(t("deploy_staging_local"))
         if _git(config, "add", ".", capture=True).returncode != 0:
-            return _error("无法暂存本地改动")
+            return _error(t("deploy_stage_failed"))
         changed = _git(config, "diff", "--cached", "--quiet")
         if changed.returncode == 1:
-            print("  · 提交变更……")
+            print(t("deploy_committing_changes"))
             committed = _git(config, "commit", "-m", "publish: update posts", capture=True)
             if committed.returncode != 0:
-                return _error("Git commit 失败，请检查 Git 配置或 hooks。")
-        print("  · 正在推送到远程 GitHub 仓库……")
+                return _error(t("deploy_commit_failed"))
+        print(t("deploy_pushing_remote_spinner"))
         pushed = _run_with_spinner(
-            "正在上传到 GitHub ……",
+            t("deploy_pushing_remote_spinner"),
             ["git", "-C", str(config.site_dir), "push"],
             timeout=600,
         )
         if pushed is None:
-            print("❌ 推送超时（10 分钟仍未完成）——通常是网络无法稳定连接 GitHub。", file=sys.stderr)
+            print(t("deploy_push_timeout"), file=sys.stderr)
             return 1
         if pushed.returncode != 0:
-            print("❌ 推送失败；本地提交已保留，可稍后重试。", file=sys.stderr)
+            print(t("deploy_push_failed"), file=sys.stderr)
             if pushed.stderr:
                 print(pushed.stderr.strip(), file=sys.stderr)
             return 1
-        print("✅ 已成功推送到 GitHub；GitHub Actions 正在云端构建并发布，预计数分钟内生效。")
+        print(t("deploy_actions_success"))
         return 0
     if not config.git_remote:
-        return _error("尚未配置 GitHub remote。请先在设置中配置 gitRemote。")
+        return _error(t("deploy_remote_missing"))
     if shutil.which("git") is None:
-        return _error("系统未找到 Git，已保留本地静态输出。")
+        return _error(t("deploy_git_missing_keep_out"))
     config.site_dir.mkdir(parents=True, exist_ok=True)
     if not (config.site_dir / ".git").exists() and _git(config, "init").returncode != 0:
-        return _error("无法初始化 Paper 托管仓库")
+        return _error(t("deploy_init_failed"))
     remotes = _git(config, "remote", capture=True)
     if not remotes.stdout.strip() and _git(config, "remote", "add", "origin", config.git_remote).returncode != 0:
-        return _error("无法绑定 GitHub remote")
+        return _error(t("deploy_bind_remote_failed"))
     if remotes.stdout.strip():
         current_remote = _git(config, "remote", "get-url", "origin", capture=True)
         if current_remote.returncode != 0 or current_remote.stdout.strip() != config.git_remote:
-            return _error("托管仓库的 origin 与 Paper 配置不一致，请先确认 remote，避免推送到错误仓库。")
-    print("  · 暂存并检查站点更新……")
+            return _error(t("deploy_origin_mismatch"))
+    print(t("deploy_staging"))
     if _git(config, "add", "out", capture=True).returncode != 0:
-        return _error("无法暂存静态输出")
+        return _error(t("deploy_stage_out_failed"))
     changed = _git(config, "diff", "--cached", "--quiet", "--", "out")
     if changed.returncode == 1:
-        print("  · 提交站点更新……")
+        print(t("deploy_committing"))
         committed = _git(config, "commit", "-m", "paper: update site", capture=True)
         if committed.returncode != 0:
-            return _error("Git commit 失败，请检查 user.name、user.email 或 hooks。")
+            return _error(t("deploy_commit_site_failed"))
     elif changed.returncode != 0:
-        return _error("无法检查站点更新（git diff 失败）。")
+        return _error(t("deploy_diff_failed"))
     # returncode 0 = 没有新 diff → 不创建空提交；两种情况都继续推送，
     # 以支持「上次 commit 已生成但 push 失败、本地无新 diff」的重试场景。
-    print(f"  · 正在推送 gh-pages 到 {config.git_remote} ……")
-    print("    （这一步需要联网上传，首次或网络较慢时可能要等几十秒到几分钟）")
+    print(t("deploy_pushing", remote=config.git_remote))
     pushed = _run_with_spinner(
-        "正在上传到 GitHub ……",
+        t("deploy_pushing_remote_spinner"),
         ["git", "-C", str(config.site_dir), "subtree", "push", "--prefix", "out", "origin", "gh-pages"],
         timeout=600,
     )
     if pushed is None:
-        print("❌ 推送超时（10 分钟仍未完成）——通常是网络无法稳定连接 GitHub。", file=sys.stderr)
-        print("   建议：在配置面板「GitHub 远程 → 测试连接」检查连通性，网络恢复后执行 paper deploy 重试。", file=sys.stderr)
+        print(t("deploy_push_timeout"), file=sys.stderr)
+        print(t("deploy_push_advice_timeout"), file=sys.stderr)
         return 1
     if pushed.returncode != 0:
-        print("❌ GitHub Pages 推送失败；本地状态保留，可稍后执行 paper deploy 重试。", file=sys.stderr)
+        print(t("deploy_push_failed_retry_hint"), file=sys.stderr)
         if pushed.stderr:
             print(pushed.stderr.strip(), file=sys.stderr)
-        print("   常见原因：网络连不上 GitHub、SSH 密钥 / 个人访问令牌未配置或已失效、仓库地址填错。", file=sys.stderr)
-        print("   建议：配置面板「GitHub 远程 → 测试连接」检查连通性，或 ssh -T git@github.com 验证认证。", file=sys.stderr)
+        print(t("deploy_push_common_reasons"), file=sys.stderr)
         return 1
-    print("✅ 已推送 gh-pages；GitHub Pages 可能仍需数分钟完成构建。")
+    print(t("deploy_success"))
     return 0
 
 
@@ -1684,11 +1726,11 @@ def cmd_publish(all_posts: bool, slugs: list[str], local: bool = False, local_di
     if not all_posts and not slugs and sys.stdin.isatty() and sys.stdout.isatty():
         if drafts:
             chosen = _terminal_multiselect(
-                "🚀 勾选要发布的草稿（不勾选直接 Enter 仅重新构建并同步网站）：",
+                t("publish_multiselect_title"),
                 [(post.slug, post.title, post.date) for post in drafts],
             )
             if chosen is None:
-                print("已取消发布。")
+                print(t("publish_cancelled"))
                 return 0
             slugs = chosen
     if all_posts:
@@ -1698,7 +1740,7 @@ def cmd_publish(all_posts: bool, slugs: list[str], local: bool = False, local_di
         missing = [slug for slug in slugs if slug not in by_slug]
         if missing:
             available = ", ".join(post.slug for post in posts)
-            return _error(f"没有找到文章：{', '.join(missing)}。可用文章：{available or '无'}", 1)
+            return _error(t("publish_missing_posts", missing=", ".join(missing), available=available or t("no")), 1)
         targets = [by_slug[slug] for slug in slugs]
     else:
         # 无参数非 TTY，或交互空选择：不发布草稿，仅同步当前站点
@@ -1710,15 +1752,15 @@ def cmd_publish(all_posts: bool, slugs: list[str], local: bool = False, local_di
     for post in new_drafts:
         set_post_published(post.source_path, True)
     try:
-        _with_spinner("正在构建站点 ……", build_site, config)
+        _with_spinner(t("publish_rebuilding"), build_site, config)
     except Exception as exc:
         for source_path, original in originals.items():
             source_path.write_text(original, encoding="utf-8")
-        return _error(f"构建失败，已恢复原稿状态：{exc}", 1)
+        return _error(t("publish_failed_reverted", error=exc), 1)
     if new_drafts:
-        print(f"已将 {len(new_drafts)} 篇草稿标记为已发布。")
+        print(t("publish_marked_count", count=len(new_drafts)))
     else:
-        print("没有需要首次发布的草稿，已重新生成静态站点。")
+        print(t("publish_no_drafts"))
     return cmd_deploy(local=local, local_dir=local_dir)
 
 
@@ -1727,19 +1769,19 @@ def cmd_status(local: bool = False, local_dir: Path | str | None = None) -> int:
     if config is None:
         return 2
     posts = discover_posts(config.posts_dir)
-    print(f"文章目录：{config.posts_dir}")
-    print(f"托管目录：{config.site_dir}")
-    print(f"文章数量：{len(posts)}（已发布 {sum(post.published for post in posts)}）")
-    print(f"Git remote：{config.git_remote or '未配置'}")
+    print(t("status_posts_dir", path=config.posts_dir))
+    print(t("status_site_dir", path=config.site_dir))
+    print(t("status_posts_count", total=len(posts), published=sum(post.published for post in posts)))
+    print(t("status_remote", remote=config.git_remote or t("status_not_set")))
     if config.git_remote:
         info = normalize_git_remote(config.git_remote)
         if info:
-            print(f"Pages 地址：{info.pages_url}")
-    print(f"静态输出：{'存在' if config.output_dir.exists() else '未构建'}")
+            print(t("status_pages_url", url=info.pages_url))
+    print(t("status_static_out", status=t("status_out_exists") if config.output_dir.exists() else t("status_out_not_built")))
     state, label = _deployment_readiness(config)
-    print(f"部署就绪：{label}")
+    print(t("status_readiness", status=label))
     if state == "actions":
-        print("  当前项目已配置 GitHub Actions 自动构建，代码 push 到远程分支即可自动触发部署。")
+        print(t("status_actions_tip"))
     elif state == "pushed":
         _refine_pushed_state(config)
     return 0
@@ -1759,16 +1801,16 @@ def _refine_pushed_state(config: PaperConfig) -> None:
             timeout=5,
         )
     except subprocess.TimeoutExpired:
-        print("  无法确认远程状态（可运行「测试连接」排查）。")
+        print(t("status_pushed_unable_confirm"))
         return
     if remote.returncode != 0 or not remote.stdout.strip():
-        print("  本地 gh-pages 领先远程，上次推送可能失败，可执行 paper deploy 重试。")
+        print(t("status_pushed_ahead_retry"))
         return
     remote_sha = remote.stdout.strip().split()[0]
     if remote_sha == local_sha:
-        print("  已推送，等待 GitHub Pages 构建（通常需数分钟）。")
+        print(t("status_pushed_waiting_pages"))
     else:
-        print("  本地 gh-pages 领先远程，上次推送可能失败，可执行 paper deploy 重试。")
+        print(t("status_pushed_ahead_retry"))
 
 
 def cmd_doctor() -> int:
@@ -1776,12 +1818,12 @@ def cmd_doctor() -> int:
     try:
         import markdown_it  # noqa: F401
         import pygments  # noqa: F401
-        checks.append((True, "Markdown/Pygments 运行依赖"))
+        checks.append((True, t("doctor_dependencies")))
     except ImportError:
-        checks.append((False, "Markdown/Pygments 运行依赖"))
-    checks.append((sys.version_info >= (3, 11), f"Python >= 3.11（当前 {sys.version.split()[0]}）"))
-    checks.append((shutil.which("git") is not None, "Git（仅发布需要）"))
-    checks.append((_has_config(), f"Paper 配置（{config_path()}）"))
+        checks.append((False, t("doctor_dependencies")))
+    checks.append((sys.version_info >= (3, 11), t("doctor_python_req", ver=sys.version.split()[0])))
+    checks.append((shutil.which("git") is not None, t("doctor_git_req")))
+    checks.append((_has_config(), t("doctor_config_req", path=config_path())))
     for ok, name in checks:
         print(f"{'✅' if ok else '❌'} {name}")
     return 0 if all(ok for ok, _ in checks[:2]) else 1
@@ -1846,7 +1888,7 @@ def _startup_update_notice() -> str:
 
     latest = _latest_available_version()
     if latest and _version_key(latest) > _version_key(VERSION):
-        return f"🆕 Paper {latest} 新版本可用，请使用 `paper update` 命令升级。"
+        return t("update_notice_banner", latest=latest)
     return ""
 
 
@@ -1860,13 +1902,12 @@ def _is_homebrew_install() -> bool:
 def cmd_update() -> int:
     """Self-update Paper when installed via the Homebrew tap."""
     if shutil.which("brew") is None:
-        return _error("未找到 Homebrew，Paper 自更新依赖 brew。请先安装 Homebrew。", 1)
+        return _error(t("update_brew_missing"), 1)
     if not _is_homebrew_install():
-        print("当前 paper 不是 Homebrew 安装（源码或开发环境），无法用 brew 自更新。")
-        print("请先 `brew install ohmyangboy/tap/paper`，之后即可用 `paper update` 自更新。")
+        print(t("update_non_brew"))
         return 1
-    print(f"当前版本：paper {VERSION}")
-    print("正在刷新 Homebrew tap …")
+    print(t("update_current_ver", version=VERSION))
+    print(t("update_refreshing_tap"))
     subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     info = subprocess.run(
         ["brew", "info", "--json=v2", "ohmyangboy/tap/paper"],
@@ -1876,103 +1917,108 @@ def cmd_update() -> int:
     try:
         latest = json.loads(info.stdout)["formulae"][0]["versions"]["stable"]
     except (KeyError, IndexError, ValueError):
-        return _error("无法读取 Paper 最新版本信息，请检查网络后重试。", 1)
-    print(f"最新版本：paper {latest}")
+        return _error(t("update_fetching_failed"), 1)
+    print(t("update_latest_version", version=latest))
     if _version_key(latest) <= _version_key(VERSION):
-        print("✅ 已是最新版本，无需更新。")
+        print(t("update_already_latest"))
         return 0
-    print(f"发现新版本 {VERSION} → {latest}，正在升级 …")
+    print(t("update_upgrading", current=VERSION, latest=latest))
     if subprocess.run(["brew", "upgrade", "ohmyangboy/tap/paper"]).returncode == 0:
-        print("✅ 已升级到最新版本。")
+        print(t("update_success"))
         return 0
-    return _error("brew upgrade 失败，请手动运行：brew upgrade ohmyangboy/tap/paper", 1)
+    return _error(t("update_failed_brew_upgrade"), 1)
 
 
 def cmd_uninstall(clean: bool) -> int:
-    print("Paper 程序由 Homebrew 管理，请使用：brew uninstall paper")
+    print(t("uninstall_guide"))
     if clean:
-        answer = input("确认清理 ~/.paper（不会删除文章原稿）？输入 CLEAN：") if sys.stdin.isatty() else ""
+        answer = input(t("uninstall_prompt_clean")) if sys.stdin.isatty() else ""
         if answer == "CLEAN":
             shutil.rmtree(Path(os.environ.get("PAPER_HOME", Path.home() / ".paper")), ignore_errors=True)
-            print("✅ 已清理 Paper 配置与托管站点。原稿目录未修改。")
+            print(t("uninstall_cleaned_msg"))
         else:
-            print("已取消清理。")
+            print(t("uninstall_clean_cancelled"))
     return 0
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="paper", description="Minimal Python static-site generator and writing CLI")
+    parser = argparse.ArgumentParser(prog="paper", description=t("cli_description"))
     parser.add_argument("--version", action="version", version=f"paper {VERSION}")
-    parser.add_argument("-l", "--local", action="store_true", help="Run in local directory mode (uses current directory for posts and site)")
-    parser.add_argument("-C", "--dir", type=str, default=None, help="Run in a specific project directory mode")
+    parser.add_argument("-l", "--local", action="store_true", help=t("help_local"))
+    parser.add_argument("-C", "--dir", type=str, default=None, help=t("help_dir"))
+    parser.add_argument("--lang", "--language", type=str, default=None, choices=["zh", "en", "zh_CN", "en_US", "auto"], help=t("help_lang"))
 
     def _add_common_options(subparser: argparse.ArgumentParser) -> None:
-        subparser.add_argument("-l", "--local", action="store_true", default=argparse.SUPPRESS, help="Run in local directory mode")
-        subparser.add_argument("-C", "--dir", type=str, default=argparse.SUPPRESS, help="Run in a specific project directory mode")
+        subparser.add_argument("-l", "--local", action="store_true", default=argparse.SUPPRESS, help=t("help_local"))
+        subparser.add_argument("-C", "--dir", type=str, default=argparse.SUPPRESS, help=t("help_dir"))
+        subparser.add_argument("--lang", "--language", type=str, default=argparse.SUPPRESS, choices=["zh", "en", "zh_CN", "en_US", "auto"], help=t("help_lang"))
 
     commands = parser.add_subparsers(dest="command")
-    init = commands.add_parser("init", help="Create a standard posts directory and link it")
+    init = commands.add_parser("init", help=t("help_cmd_init"))
     _add_common_options(init)
 
-    link = commands.add_parser("link", help="Link an existing Markdown posts directory")
+    link = commands.add_parser("link", help=t("help_cmd_link"))
     link.add_argument("path", nargs="?")
     _add_common_options(link)
 
-    new = commands.add_parser("new", help="Create a draft")
+    new = commands.add_parser("new", help=t("help_cmd_new"))
     new.add_argument("title", nargs="?")
     _add_common_options(new)
 
-    list_p = commands.add_parser("list", aliases=["posts"], help="List posts")
+    list_p = commands.add_parser("list", aliases=["posts"], help=t("help_cmd_list"))
     _add_common_options(list_p)
 
-    build = commands.add_parser("build", help="Generate the production site without deploying")
+    build = commands.add_parser("build", help=t("help_cmd_build"))
     _add_common_options(build)
 
-    serve = commands.add_parser("serve", help="Start a local draft preview")
+    serve = commands.add_parser("serve", help=t("help_cmd_serve"))
     serve.add_argument("--port", type=int, default=8000)
     _add_common_options(serve)
 
-    publish = commands.add_parser("publish", help="Publish drafts and sync the live site")
+    publish = commands.add_parser("publish", help=t("help_cmd_publish"))
     publish.add_argument("slugs", nargs="*")
     publish.add_argument("--all", action="store_true")
     _add_common_options(publish)
 
-    deploy = commands.add_parser("deploy", help="Deploy the current build to GitHub Pages (retry after a failed publish)")
+    deploy = commands.add_parser("deploy", help=t("help_cmd_deploy"))
     _add_common_options(deploy)
 
-    status = commands.add_parser("status", help="Show site status")
+    status = commands.add_parser("status", help=t("help_cmd_status"))
     _add_common_options(status)
 
-    config = commands.add_parser("config", help="Open the arrow-key config console")
+    config = commands.add_parser("config", help=t("help_cmd_config"))
     _add_common_options(config)
     config_sub = config.add_subparsers(dest="config_cmd")
-    home = config_sub.add_parser("home", help="Brand: highlight color and favicon")
+    home = config_sub.add_parser("home", help=t("config_item_brand"))
     _add_common_options(home)
     home_sub = home.add_subparsers(dest="home_cmd")
-    c_color = home_sub.add_parser("color", help="Set the highlight color")
+    c_color = home_sub.add_parser("color", help=t("brand_item_color"))
     _add_common_options(c_color)
-    c_icon = home_sub.add_parser("icon", help="Set the brand icon")
+    c_icon = home_sub.add_parser("icon", help=t("brand_item_icon"))
     _add_common_options(c_icon)
-    compress = config_sub.add_parser("compress", help="Enable or disable output image compression")
+    compress = config_sub.add_parser("compress", help=t("config_item_compress"))
     compress.add_argument("compress_cmd", nargs="?", choices=["on", "off"])
     _add_common_options(compress)
-    c_editor = config_sub.add_parser("editor", help="Choose the default editor")
+    c_lang = config_sub.add_parser("lang", aliases=["language"], help=t("config_item_language"))
+    c_lang.add_argument("lang_code", nargs="?", choices=["zh", "en", "zh_CN", "en_US", "auto", "system"])
+    _add_common_options(c_lang)
+    c_editor = config_sub.add_parser("editor", help=t("config_item_editor"))
     c_editor.add_argument("editor_name", nargs="?", help="Editor name, command, or app path")
     _add_common_options(c_editor)
-    c_link = config_sub.add_parser("link", help="Link a Markdown posts directory")
+    c_link = config_sub.add_parser("link", help=t("config_item_link"))
     _add_common_options(c_link)
-    c_remote = config_sub.add_parser("remote", help="Configure the GitHub remote / Pages")
+    c_remote = config_sub.add_parser("remote", help=t("config_item_remote"))
     _add_common_options(c_remote)
-    c_pages = config_sub.add_parser("pages", help="Set the site URL or custom domain")
+    c_pages = config_sub.add_parser("pages", help=t("config_item_pages"))
     _add_common_options(c_pages)
-    c_test = config_sub.add_parser("test", help="Test Git and remote reachability")
+    c_test = config_sub.add_parser("test", help=t("config_item_test"))
     _add_common_options(c_test)
-    c_status = config_sub.add_parser("status", help="Show full config and deployment status")
+    c_status = config_sub.add_parser("status", help=t("config_item_status"))
     _add_common_options(c_status)
 
-    commands.add_parser("doctor", help="Check the install and runtime environment")
-    commands.add_parser("update", help="Self-update Paper via Homebrew")
-    uninstall = commands.add_parser("uninstall", help="Show uninstall instructions, optionally clean Paper data")
+    commands.add_parser("doctor", help=t("help_cmd_doctor"))
+    commands.add_parser("update", help=t("help_cmd_update"))
+    uninstall = commands.add_parser("uninstall", help=t("help_cmd_uninstall"))
     uninstall.add_argument("--clean", action="store_true")
     return parser
 
@@ -1982,32 +2028,32 @@ def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path
     enter_alt_screen()
     try:
         while True:
-            mode_prefix = f"【当前目录模式：{Path(local_dir or '.').resolve().name}】\n" if (local or local_dir is not None) else ""
-            prompt_header = f"{startup_notice}\n\n{mode_prefix}请使用方向键导航，Enter 或数字键选择对应的功能：" if startup_notice else f"{mode_prefix}请使用方向键导航，Enter 或数字键选择对应的功能："
+            mode_prefix = t("dashboard_mode_prefix", dir_name=Path(local_dir or '.').resolve().name) if (local or local_dir is not None) else ""
+            prompt_header = f"{startup_notice}\n\n{mode_prefix}{t('dashboard_prompt')}" if startup_notice else f"{mode_prefix}{t('dashboard_prompt')}"
             action = _terminal_menu(
                 prompt_header,
                 [
-                    ("list", "list", "管理文章"),
-                    ("new", "new", "新建文章并打开编辑器"),
-                    ("config", "config", "设置路径、编辑器与品牌"),
-                    ("publish", "publish", "选择草稿并发布"),
-                    ("serve", "serve", "启动本地热更新预览"),
-                    ("uninstall", "uninstall", "卸载与清理配置，保留原稿"),
-                    ("quit", "quit", "退出 Paper"),
+                    ("list", "list", t("menu_list")),
+                    ("new", "new", t("menu_new")),
+                    ("config", "config", t("menu_config")),
+                    ("publish", "publish", t("menu_publish")),
+                    ("serve", "serve", t("menu_serve")),
+                    ("uninstall", "uninstall", t("menu_uninstall")),
+                    ("quit", "quit", t("menu_quit")),
                 ],
-                footer_message="再按一次 Esc 或 Q 退出 Paper" if exit_armed else "",
+                footer_message=t("press_esc_to_exit") if exit_armed else "",
             )
             if action is None:
                 if exit_armed:
                     _clear_screen()
-                    print("\n已退出 Paper。再见！\n")
+                    print(t("exit_goodbye"))
                     return 0
                 exit_armed = True
                 continue
             exit_armed = False
             if action == "quit":
                 _clear_screen()
-                print("\n已退出 Paper。再见！\n")
+                print(t("exit_goodbye"))
                 return 0
             if action == "list":
                 cmd_list(local=local, local_dir=local_dir)
@@ -2030,6 +2076,37 @@ def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path
 
 def _main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
+
+    cli_lang = None
+    for idx, arg in enumerate(raw_argv):
+        if arg in ("--lang", "--language"):
+            if idx + 1 < len(raw_argv):
+                cli_lang = raw_argv[idx + 1]
+        elif arg.startswith("--lang=") or arg.startswith("--language="):
+            cli_lang = arg.split("=", 1)[1]
+
+    local = "-l" in raw_argv or "--local" in raw_argv
+    dir_path = None
+    for idx, arg in enumerate(raw_argv):
+        if arg in ("-C", "--dir"):
+            if idx + 1 < len(raw_argv):
+                dir_path = raw_argv[idx + 1]
+        elif arg.startswith("--dir="):
+            dir_path = arg.split("=", 1)[1]
+
+    cfg_lang = None
+    try:
+        if local or dir_path is not None:
+            cfg = load_local_config(dir_path or ".")
+        else:
+            cfg = load_config()
+        cfg_lang = cfg.language
+    except Exception:
+        pass
+
+    effective_lang = resolve_language(config_lang=cfg_lang, cli_lang=cli_lang)
+    set_current_language(effective_lang)
+
     args = make_parser().parse_args(raw_argv)
     
     local = bool(getattr(args, "local", False))
@@ -2054,6 +2131,7 @@ def _main(argv: list[str] | None = None) -> int:
             home_cmd=getattr(args, "home_cmd", None),
             compress_cmd=getattr(args, "compress_cmd", None),
             editor_name=getattr(args, "editor_name", None),
+            lang_code=getattr(args, "lang_code", None),
             local=local,
             local_dir=dir_path,
         )

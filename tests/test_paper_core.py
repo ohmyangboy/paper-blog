@@ -23,9 +23,23 @@ from paper_runtime.core import (
     parse_frontmatter,
     render_markdown,
 )
+from paper_runtime.i18n import get_current_language, set_current_language
 
 
 class PaperCoreTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_lang = get_current_language()
+        self._orig_paper_lang = os.environ.get("PAPER_LANG")
+        os.environ["PAPER_LANG"] = "zh_CN"
+        set_current_language("zh_CN")
+
+    def tearDown(self):
+        if self._orig_paper_lang is None:
+            os.environ.pop("PAPER_LANG", None)
+        else:
+            os.environ["PAPER_LANG"] = self._orig_paper_lang
+        set_current_language(self._orig_lang)
+
     def test_legacy_default_icon_migrates_to_official_zine_icon(self):
         with tempfile.TemporaryDirectory() as root:
             old_home = os.environ.get("PAPER_HOME")
@@ -688,6 +702,67 @@ $$
                     os.environ.pop("PAPER_HOME", None)
                 else:
                     os.environ["PAPER_HOME"] = old_home
+
+    def test_markdown_multi_image_in_same_paragraph_wraps_in_image_group(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a.png").write_bytes(b"\x89PNG a")
+            (posts / "b.png").write_bytes(b"\x89PNG b")
+            rendered = render_markdown("![[a.png|200]] ![[b.png|200]]", posts_dir=posts)
+            self.assertIn('<div class="image-group">', rendered)
+            self.assertIn('<img src="/assets/a.png"', rendered)
+            self.assertIn('<img src="/assets/b.png"', rendered)
+            self.assertIn('</div>', rendered)
+            self.assertNotIn('<p><img', rendered)
+
+    def test_markdown_multi_image_across_lines_wraps_in_image_group(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a.png").write_bytes(b"\x89PNG a")
+            (posts / "b.png").write_bytes(b"\x89PNG b")
+            (posts / "c.png").write_bytes(b"\x89PNG c")
+            rendered = render_markdown("![[a.png|200]]\n![[b.png|200]]\n![[c.png|200]]", posts_dir=posts)
+            self.assertIn('<div class="image-group">', rendered)
+            self.assertEqual(rendered.count('<img '), 3)
+            self.assertNotIn('<br>', rendered)
+
+    def test_markdown_single_image_stays_in_paragraph(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "single.png").write_bytes(b"\x89PNG single")
+            rendered = render_markdown("![[single.png|300]]", posts_dir=posts)
+            self.assertNotIn('class="image-group"', rendered)
+            self.assertIn('<p><img src="/assets/single.png"', rendered)
+
+    def test_markdown_mixed_text_and_images_stays_in_paragraph(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "a.png").write_bytes(b"\x89PNG a")
+            (posts / "b.png").write_bytes(b"\x89PNG b")
+            rendered = render_markdown("前缀文字 ![[a.png]] ![[b.png]] 后缀文字", posts_dir=posts)
+            self.assertNotIn('class="image-group"', rendered)
+            self.assertIn('<p>前缀文字 <img', rendered)
+
+    def test_markdown_linked_multi_images_wraps_in_image_group(self):
+        rendered = render_markdown("[![a](https://example.com/a.png)](https://example.com/1) [![b](https://example.com/b.png)](https://example.com/2)")
+        self.assertIn('<div class="image-group">', rendered)
+        self.assertIn('<a href="https://example.com/1"', rendered)
+        self.assertIn('<a href="https://example.com/2"', rendered)
+
+    def test_markdown_missing_images_in_multi_group(self):
+        with tempfile.TemporaryDirectory() as root:
+            rendered = render_markdown("![[missing1.png]]\n![[missing2.png]]", posts_dir=Path(root))
+            self.assertIn('<div class="image-group">', rendered)
+            self.assertIn('图片未找到：missing1.png', rendered)
+            self.assertIn('图片未找到：missing2.png', rendered)
+
+    def test_css_includes_image_group_120_percent_and_centering(self):
+        from paper_runtime.core import _css
+        css = _css(PaperConfig(posts_dir=Path("p"), site_dir=Path("s")))
+        self.assertIn(".markdown .image-group { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 1rem; width: 120%; max-width: 120%; margin-left: -10%; margin-right: -10%;", css)
+        self.assertIn(".markdown .image-group img { display: block; max-width: 100%; height: auto; margin: 0; flex: 0 1 auto; }", css)
+        self.assertIn(".markdown .image-group img:not([width]) { flex: 1 1 0; min-width: min(200px, 100%); max-width: 100%; }", css)
+        self.assertIn(".markdown .image-group { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0;", css)
 
 
 class TestNormalizeGitRemote(unittest.TestCase):

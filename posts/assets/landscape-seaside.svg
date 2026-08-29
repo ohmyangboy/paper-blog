@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 380" width="100%" height="100%" style="border-radius: 8px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <defs>
+    <!-- Sunset Sky Gradient -->
+    <linearGradient id="sunsetSky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fae8ff" />
+      <stop offset="45%" stop-color="#fbcfe8" />
+      <stop offset="75%" stop-color="#fed7aa" />
+      <stop offset="100%" stop-color="#fed7aa" />
+    </linearGradient>
+    <!-- Setting Sun Gradient -->
+    <linearGradient id="sunsetSun" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e" />
+      <stop offset="100%" stop-color="#fb923c" />
+    </linearGradient>
+    <!-- Sea Horizon Gradient -->
+    <linearGradient id="seaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="40%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <!-- Sun Glow -->
+    <filter id="sunGlowSea" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Sky -->
+  <rect width="600" height="380" rx="8" fill="url(#sunsetSky)" />
+
+  <!-- Sunset Sun -->
+  <circle cx="240" cy="185" r="44" fill="url(#sunsetSun)" filter="url(#sunGlowSea)" opacity="0.95" />
+
+  <!-- Sea -->
+  <rect y="210" width="600" height="170" fill="url(#seaGrad)" />
+
+  <!-- Sun Reflection on Sea -->
+  <ellipse cx="240" cy="225" rx="60" ry="3" fill="#fde047" opacity="0.8" />
+  <ellipse cx="240" cy="240" rx="45" ry="3" fill="#fdba74" opacity="0.7" />
+  <ellipse cx="240" cy="260" rx="30" ry="2.5" fill="#fca5a5" opacity="0.6" />
+  <ellipse cx="240" cy="285" rx="18" ry="2" fill="#fda4af" opacity="0.5" />
+
+  <!-- Coastal Cliff & Lighthouse -->
+  <path d="M 460,380 L 460,250 Q 510,230 600,210 L 600,380 Z" fill="#1e293b" />
+
+  <!-- Lighthouse -->
+  <polygon points="505,245 515,175 525,175 535,245" fill="#f8fafc" />
+  <!-- Red Stripes on Lighthouse -->
+  <polygon points="509,215 513,195 527,195 531,215" fill="#e11d48" />
+  <!-- Lantern Room & Dome -->
+  <rect x="513" y="165" width="14" height="10" rx="2" fill="#fbbf24" />
+  <path d="M 511,165 Q 520,152 529,165 Z" fill="#e11d48" />
+  <!-- Light Beam -->
+  <polygon points="513,170 260,110 260,150 513,170" fill="#fef08a" opacity="0.25" />
+
+  <!-- Sailboat Silhouette -->
+  <polygon points="120,205 135,175 135,205" fill="#ffffff" opacity="0.9" />
+  <polygon points="137,205 147,185 137,185" fill="#ffffff" opacity="0.75" />
+  <path d="M 115,206 Q 130,215 152,206 Z" fill="#334155" />
+
+  <!-- Birds -->
+  <path d="M 330,120 Q 335,114 340,120 Q 345,114 350,120" fill="none" stroke="#e11d48" stroke-width="1.3" stroke-linecap="round" />
+  <path d="M 360,135 Q 364,130 368,135 Q 372,130 376,135" fill="none" stroke="#e11d48" stroke-width="1.1" stroke-linecap="round" />
+
+  <!-- Caption Label Badge -->
+  <rect x="20" y="20" width="130" height="26" rx="13" fill="#ffffff" opacity="0.85" />
+  <text x="32" y="37" fill="#0f172a" font-size="12" font-weight="600" letter-spacing="0.02em">🌅 晚霞海湾</text>
+</svg>

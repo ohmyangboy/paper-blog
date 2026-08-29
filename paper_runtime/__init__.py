@@ -17,6 +17,15 @@ from .core import (
     save_config,
     set_post_published,
 )
+from .i18n import (
+    LANGUAGE_LABELS,
+    SUPPORTED_LANGUAGES,
+    get_current_language,
+    normalize_locale,
+    resolve_language,
+    set_current_language,
+    t,
+)
 
 __all__ = [
     "PaperConfig",
@@ -30,4 +39,11 @@ __all__ = [
     "render_markdown",
     "save_config",
     "set_post_published",
+    "LANGUAGE_LABELS",
+    "SUPPORTED_LANGUAGES",
+    "get_current_language",
+    "normalize_locale",
+    "resolve_language",
+    "set_current_language",
+    "t",
 ]
