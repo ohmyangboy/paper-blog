@@ -523,7 +523,7 @@ class PaperCliTests(unittest.TestCase):
             self.assertEqual(main(["status"]), 0)
         rendered = output.getvalue()
         self.assertIn("9.9.9", rendered)
-        self.assertIn("自动升级", rendered)
+        self.assertIn("升级", rendered)
 
     def test_cli_silent_when_no_update_available(self):
         output = io.StringIO()
@@ -533,7 +533,7 @@ class PaperCliTests(unittest.TestCase):
             self.assertEqual(main(["status"]), 0)
         rendered = output.getvalue()
         self.assertNotIn("9.9.9", rendered)
-        self.assertNotIn("自动升级", rendered)
+        self.assertNotIn("升级", rendered)
         self.assertNotIn("新版本", rendered)
 
     def test_cmd_doctor_includes_version_and_update_check(self):
@@ -550,7 +550,7 @@ class PaperCliTests(unittest.TestCase):
             os.environ["PAPER_HOME"] = str(Path(root) / ".paper")
             response = mock.MagicMock()
             response.__enter__.return_value.read.return_value = (
-                b'[{"tag_name":"v9.9.9","draft":false},{"tag_name":"v0.1.1-beta.4","draft":false}]'
+                b'url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v9.9.9.tar.gz"'
             )
             try:
                 with mock.patch("paper_cli.urlopen", return_value=response) as open_url:

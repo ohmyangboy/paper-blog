@@ -58,7 +58,7 @@ from paper_runtime.i18n import (
     t,
 )
 
-VERSION = "0.1.3-beta.2"
+VERSION = "0.1.3-beta.1"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -1923,7 +1923,7 @@ def _startup_update_notice() -> str:
 
 def _check_and_auto_update() -> bool:
     """Silently check for updates on startup. If a newer version is available,
-    prompt the user and automatically upgrade via Homebrew if applicable.
+    prompt the user and automatically upgrade via Homebrew with an animated spinner.
     Returns True if an upgrade was performed and restarted/handled.
     """
     if os.environ.get("PAPER_NO_AUTO_UPDATE", "").lower() in ("1", "true", "yes"):
@@ -1933,20 +1933,29 @@ def _check_and_auto_update() -> bool:
     if not latest or _version_key(latest) <= _version_key(VERSION):
         return False
 
-    print(f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}")
-
     if not _is_homebrew_install():
+        print(f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}")
         print(f"{TERRACOTTA}{t('update_non_brew')}{RESET}\n")
         return False
 
     if shutil.which("brew") is None:
+        print(f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}")
         print(f"{TERRACOTTA}⚠️ {t('update_brew_missing')}{RESET}\n")
         return False
 
-    print(f"⏳ {t('auto_update_running')}")
-    subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    res = subprocess.run(["brew", "upgrade", "ohmyangboy/tap/paper"])
-    if res.returncode == 0:
+    def _upgrade_task() -> int:
+        subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(
+            ["brew", "upgrade", "ohmyangboy/tap/paper"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return res.returncode
+
+    spinner_msg = f"{TERRACOTTA}🆕 {t('auto_update_found', current=VERSION, latest=latest)}{RESET}"
+    res_code = _with_spinner(spinner_msg, _upgrade_task)
+
+    if res_code == 0:
         print(f"✅ {t('auto_update_success', latest=latest)}\n")
         try:
             os.execvp(sys.argv[0], sys.argv)
@@ -1973,23 +1982,34 @@ def cmd_update() -> int:
         print(t("update_non_brew"))
         return 1
     print(t("update_current_ver", version=VERSION))
-    print(t("update_refreshing_tap"))
-    subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    info = subprocess.run(
-        ["brew", "info", "--json=v2", "ohmyangboy/tap/paper"],
-        capture_output=True,
-        text=True,
-    )
+
+    def _refresh_tap() -> subprocess.CompletedProcess[str]:
+        subprocess.run(["brew", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.run(
+            ["brew", "info", "--json=v2", "ohmyangboy/tap/paper"],
+            capture_output=True,
+            text=True,
+        )
+
+    info = _with_spinner(t("update_refreshing_tap"), _refresh_tap)
     try:
         latest = json.loads(info.stdout)["formulae"][0]["versions"]["stable"]
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, ValueError, AttributeError):
         return _error(t("update_fetching_failed"), 1)
     print(t("update_latest_version", version=latest))
     if _version_key(latest) <= _version_key(VERSION):
         print(t("update_already_latest"))
         return 0
-    print(t("update_upgrading", current=VERSION, latest=latest))
-    if subprocess.run(["brew", "upgrade", "ohmyangboy/tap/paper"]).returncode == 0:
+
+    def _run_upgrade() -> int:
+        return subprocess.run(
+            ["brew", "upgrade", "ohmyangboy/tap/paper"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+
+    upgrade_msg = t("update_upgrading", current=VERSION, latest=latest)
+    if _with_spinner(upgrade_msg, _run_upgrade) == 0:
         print(t("update_success"))
         return 0
     return _error(t("update_failed_brew_upgrade"), 1)
