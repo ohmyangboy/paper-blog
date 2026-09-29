@@ -67,6 +67,14 @@ The empirical loss and probability density follow parametric surfaces $\hat{\mat
 
 ![[macos-mountain-lake.jpg|460]] ![[macos-coastal-cliff.jpg|460]]
 
+标准 Markdown 图片支持拼接宽高与圆角参数：`?w=520&r=16` 限制宽度并加圆角，`#w=300&h=200` 同时锁定宽高，`r=full` 可裁成圆形，`r=0` 则是直角。
+
+![山景](assets/macos-mountain-lake.jpg?w=520&r=16)
+
+![海崖](assets/macos-coastal-cliff.jpg#w=300&h=200)
+
+也可以沿用 Obsidian 的 `|宽x高` 后缀，`![图注|300x200|center](assets/macos-coastal-cliff.jpg)` 会同时获得尺寸与居中对齐。
+
 ---
 
 ## 4. 工程组件与结构化数据

@@ -901,6 +901,34 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "✅ 图片压缩已{state}。",
         "en_US": "✅ Image compression is now {state}.",
     },
+    "image_radius_menu_title": {
+        "zh_CN": "选择 Markdown 图片圆角：",
+        "en_US": "Select the Markdown image corner radius:",
+    },
+    "image_radius_opt_square": {
+        "zh_CN": "直角 · 0px",
+        "en_US": "Square · 0px",
+    },
+    "image_radius_opt_default": {
+        "zh_CN": "{radius}px（默认）",
+        "en_US": "{radius}px (Default)",
+    },
+    "image_radius_opt_custom": {
+        "zh_CN": "自定义像素值…",
+        "en_US": "Custom pixel value…",
+    },
+    "image_radius_prompt": {
+        "zh_CN": "输入圆角像素值（0-512）：",
+        "en_US": "Enter the corner radius in pixels (0-512): ",
+    },
+    "image_radius_set": {
+        "zh_CN": "✅ 图片圆角已设为 {radius}px。",
+        "en_US": "✅ Image corner radius set to {radius}px.",
+    },
+    "image_radius_invalid": {
+        "zh_CN": "圆角必须是 0 到 512 之间的整数。",
+        "en_US": "The corner radius must be an integer between 0 and 512.",
+    },
     "compress_set": {
         "zh_CN": "✅ 图片压缩已设置为：{state}",
         "en_US": "✅ Image compression set to: {state}",
@@ -1168,6 +1196,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "config_item_compress": {
         "zh_CN": "图片压缩",
         "en_US": "Image Compression",
+    },
+    "config_item_image_radius": {
+        "zh_CN": "图片圆角",
+        "en_US": "Image Corner Radius",
+    },
+    "config_current_image_radius": {
+        "zh_CN": "图片圆角 · 当前 {radius}px",
+        "en_US": "Image Corner Radius · {radius}px",
     },
     "config_item_language": {
         "zh_CN": "语言设置",
@@ -1515,9 +1551,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "{site_name} 的最新文章",
         "en_US": "Latest posts from {site_name}",
     },
-    "back_to_previous": {
-        "zh_CN": "返回上一页",
-        "en_US": "Back to previous page",
+    "back_to_home": {
+        "zh_CN": "返回首页",
+        "en_US": "Back to home",
+    },
+    "theme_light": {
+        "zh_CN": "浅色主题",
+        "en_US": "Light theme",
+    },
+    "theme_dark": {
+        "zh_CN": "深色主题",
+        "en_US": "Dark theme",
+    },
+    "theme_auto": {
+        "zh_CN": "跟随系统主题",
+        "en_US": "System theme",
     },
     "draft_preview": {
         "zh_CN": "草稿预览",

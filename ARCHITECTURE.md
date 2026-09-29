@@ -12,6 +12,8 @@ paper CLI
 
 Python 是用户可见的唯一 runtime，也是唯一 build graph。Node、npm、React、Next.js 不应成为安装或构建前置条件；浏览器端只接收生成后的静态 HTML/CSS。
 
+- 浏览器端只接收生成后的静态 HTML/CSS：主题（浅色/深色/跟随系统）由 `document.documentElement[data-theme]` 驱动，首屏脚本在绘制前写入，页脚图标零 JS 切换显示。
+
 ## 数据边界
 
 - 原稿：`paper link` 关联的目录，默认只扫描顶层 `.md`。
@@ -26,6 +28,8 @@ Python 是用户可见的唯一 runtime，也是唯一 build graph。Node、npm�
 CommonMark 基线 + 表格、删除线、任务列表和 Pygments 代码高亮；raw HTML 默认转义。不把“与 GitHub 完全一致”作为兼容性承诺，也不引入 MDX/React 组件。
 
 Paper 在同一渲染链中额外保留顶层块间最多两行源文件留白，并兼容 Obsidian 图片嵌入、替代文本和数值尺寸。附件解析被限制在已关联文章目录：明确相对路径优先，纯文件名递归匹配必须唯一；缺失图片用可见占位表示，重名则中止构建。Obsidian 笔记嵌入不在支持范围内。
+
+图片的尺寸、圆角与对齐统一走一条提示解析：`?`/`#` 片段里的 `w=`/`h=`/`r=` 参数与 `left`/`right`/`center` 对齐词，加上 Obsidian 风格的 `|宽x高` 替代文本后缀。本地图片的查询串与片段在导入后从资源地址上移除；远程图片保留自己的查询串（`?w=` 常属于图片服务），只读取 `#` 片段。圆角默认值来自配置项 `imageRadius`，通过 CSS 变量 `--image-radius` 落到样式，单图参数以内联 `style` 覆盖。
 
 ## 发布状态（v0.1.0）
 

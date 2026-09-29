@@ -45,6 +45,12 @@ PAPER_PROJECT_URL = "https://ohmyangboy.github.io/paper-blog/"
 IMAGE_COMPRESSION_MIN_BYTES = 256 * 1024
 DEFAULT_ICON = "paper:default"
 DEFAULT_ICON_FILENAME = "paper-blog-favicon.png"
+DEFAULT_IMAGE_RADIUS = 8
+MAX_IMAGE_RADIUS = 512
+MAX_IMAGE_DIMENSION = 10000
+THEME_STORAGE_KEY = "paper-theme"
+THEME_TRANSITION_MS = 400
+THEME_BACKGROUNDS = {"light": "#ffffff", "dark": "#09090b"}
 LEGACY_DEFAULT_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32"><rect width="100" height="100" rx="22" fill="#F9F9FB"/><path d="M 32 25 L 56 25 C 68 25 74 33 74 44 C 74 55 68 63 56 63 L 44 63 L 44 75" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M 44 37 L 55 37 C 62 37 65 40 65 44 C 65 48 62 51 55 51 Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><line x1="32" y1="25" x2="32" y2="75" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>'
 _SAFE_SLUG = re.compile(r"[^\w\-\u4e00-\u9fff]+", re.UNICODE)
 _BOOLS = {"true": True, "false": False, "yes": True, "no": False}
@@ -68,6 +74,7 @@ class PaperConfig:
     site_url: str = ""
     color: str = DEFAULT_COLOR
     icon: str = DEFAULT_ICON
+    image_radius: int = DEFAULT_IMAGE_RADIUS
     compress: bool = True
     language: str = "auto"
     schema_version: int = CONFIG_SCHEMA_VERSION
@@ -85,6 +92,7 @@ class PaperConfig:
         data["gitRemote"] = data.pop("git_remote")
         data["siteName"] = data.pop("site_name")
         data["siteUrl"] = data.pop("site_url")
+        data["imageRadius"] = data.pop("image_radius")
         data["language"] = self.language
         data["schemaVersion"] = data.pop("schema_version")
         return data
@@ -163,6 +171,22 @@ def _bool_value(value: Any, fallback: bool) -> bool:
     return fallback
 
 
+def image_radius_value(value: Any, fallback: int = DEFAULT_IMAGE_RADIUS) -> int:
+    """Read a corner radius in pixels, ignoring anything outside the supported range."""
+
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, int | float):
+        candidate = int(value)
+    elif isinstance(value, str) and value.strip().lstrip("+-").isdigit():
+        candidate = int(value.strip())
+    else:
+        return fallback
+    if 0 <= candidate <= MAX_IMAGE_RADIUS:
+        return candidate
+    return fallback
+
+
 def load_config(*, create: bool = False) -> PaperConfig:
     """Load the single-site config, migrating the old flat config once."""
 
@@ -191,6 +215,7 @@ def load_config(*, create: bool = False) -> PaperConfig:
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
+        image_radius=image_radius_value(loaded.get("imageRadius", loaded.get("image_radius"))),
         compress=_bool_value(loaded.get("compress"), True),
         language=str(loaded.get("language") or "auto"),
         schema_version=CONFIG_SCHEMA_VERSION,
@@ -300,6 +325,7 @@ def load_local_config(target_dir: Path | str = ".") -> PaperConfig:
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
+        image_radius=image_radius_value(loaded.get("imageRadius", loaded.get("image_radius"))),
         compress=_bool_value(loaded.get("compress"), True),
         language=str(loaded.get("language") or "auto"),
         schema_version=CONFIG_SCHEMA_VERSION,
@@ -320,6 +346,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         "site_url": current.site_url,
         "color": current.color,
         "icon": current.icon,
+        "image_radius": current.image_radius,
         "compress": current.compress,
         "language": current.language,
         "schema_version": CONFIG_SCHEMA_VERSION,
@@ -328,6 +355,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
     aliases = {
         "postsDir": "posts_dir", "siteDir": "site_dir", "repoDir": "site_dir",
         "gitRemote": "git_remote", "siteName": "site_name", "siteUrl": "site_url",
+        "imageRadius": "image_radius",
         "language": "language", "lang": "language",
         "schemaVersion": "schema_version",
     }
@@ -343,6 +371,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         site_url=str(values["site_url"]),
         color=str(values["color"]),
         icon=str(values["icon"]),
+        image_radius=image_radius_value(values["image_radius"]),
         compress=bool(values["compress"]),
         language=str(values["language"]),
         schema_version=CONFIG_SCHEMA_VERSION,
@@ -452,6 +481,125 @@ _IMAGE_SUFFIXES = {
     ".tiff",
 }
 
+# Paper image hints: `w=`/`width=`, `h=`/`height=`, `r=`/`radius=` plus bare `600x400`
+# size tokens. They are read from a `?`/`#` token bag or an Obsidian-style alt suffix.
+_IMAGE_HINT_KEYS = {
+    "w": "width",
+    "width": "width",
+    "h": "height",
+    "height": "height",
+    "r": "radius",
+    "radius": "radius",
+}
+_IMAGE_ALIGN_WORDS = {
+    "left": "left",
+    "align-left": "left",
+    "right": "right",
+    "align-right": "right",
+    "center": "center",
+    "align-center": "center",
+}
+_IMAGE_SIZE_TOKEN = re.compile(r"(\d{1,5})(?:[x×](\d{1,5}))?")
+_IMAGE_FULL_RADIUS = "full"
+_IMAGE_FULL_RADIUS_WORDS = {"full", "circle", "pill"}
+
+
+def _parse_image_hint_tokens(tokens: Iterable[str]) -> tuple[dict[str, str], list[str], str | None]:
+    """Read Paper image hints and alignment words out of one `&`/`,` separated token bag."""
+
+    hints: dict[str, str] = {}
+    remaining: list[str] = []
+    align: str | None = None
+    for raw in tokens:
+        token = raw.strip()
+        if not token:
+            continue
+        lowered = token.lower()
+        if lowered in _IMAGE_ALIGN_WORDS:
+            align = _IMAGE_ALIGN_WORDS[lowered]
+            continue
+        key, separator, value = token.partition("=")
+        target = _IMAGE_HINT_KEYS.get(key.strip().lower()) if separator else "size"
+        value = value.strip().lower()
+        if target is None:
+            remaining.append(token)
+            continue
+        if target == "size":
+            size = _IMAGE_SIZE_TOKEN.fullmatch(lowered)
+            if not size:
+                remaining.append(token)
+                continue
+            width, height = size.group(1), size.group(2)
+            if width and int(width) <= MAX_IMAGE_DIMENSION:
+                hints.setdefault("width", str(int(width)))
+            if height and int(height) <= MAX_IMAGE_DIMENSION:
+                hints.setdefault("height", str(int(height)))
+        elif target == "radius":
+            if value in _IMAGE_FULL_RADIUS_WORDS:
+                hints["radius"] = _IMAGE_FULL_RADIUS
+            elif value.isdigit() and int(value) <= MAX_IMAGE_RADIUS:
+                hints["radius"] = value
+            else:
+                remaining.append(token)
+        elif value.isdigit() and 0 < int(value) <= MAX_IMAGE_DIMENSION:
+            hints[target] = value
+        else:
+            remaining.append(token)
+    return hints, remaining, align
+
+
+def _split_image_reference(src: str) -> tuple[str, list[str], list[str]]:
+    """Split an image reference into its path plus the raw `?`/`#` token bags."""
+
+    head, _, fragment = src.partition("#")
+    path, _, query = head.partition("?")
+    return (
+        path,
+        [token for token in re.split(r"[&,;]", query)] if query else [],
+        [token for token in re.split(r"[&,;]", fragment)] if fragment else [],
+    )
+
+
+def _extract_image_hints(src: str, *, remote: bool) -> tuple[dict[str, str], str | None, str]:
+    """Return the hints carried by an image reference together with a cleaned src.
+
+    Local files never need a query string or a fragment, so both are removed and every
+    token may carry a hint. Remote references keep their query untouched because `?w=`
+    often belongs to the image service; only `#` hints are read there.
+    """
+
+    path, query_tokens, fragment_tokens = _split_image_reference(src)
+    if not remote:
+        hints, _leftover, align = _parse_image_hint_tokens([*query_tokens, *fragment_tokens])
+        return hints, align, path
+    hints, remaining, align = _parse_image_hint_tokens(fragment_tokens)
+    if not hints and align is None and remaining == fragment_tokens and not query_tokens:
+        return hints, align, src
+    cleaned = path
+    if query_tokens:
+        cleaned += "?" + "&".join(query_tokens)
+    if remaining:
+        cleaned += "#" + "&".join(remaining)
+    return hints, align, cleaned
+
+
+def _split_alt_hints(alt: str) -> tuple[str, dict[str, str], str | None]:
+    """Read Obsidian-style trailing `|600x400` / `|r=16` hints from standard Markdown alt text."""
+
+    hints: dict[str, str] = {}
+    align: str | None = None
+    parts = alt.split("|")
+    while len(parts) > 1:
+        parsed, remaining, token_align = _parse_image_hint_tokens([parts[-1]])
+        if remaining or not (parsed or token_align):
+            break
+        for key, value in parsed.items():
+            hints.setdefault(key, value)
+        if token_align and align is None:
+            align = token_align
+        parts.pop()
+    return "|".join(parts), hints, align
+
 
 def _copy_local_image(source: Path, posts_dir: Path) -> str | None:
     """Copy one validated image source into Paper's managed assets directory."""
@@ -559,14 +707,14 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
             elif mod_lower in {"align-left", "align-right", "align-center"}:
                 align = mod_lower.removeprefix("align-")
             else:
-                dimensions = re.fullmatch(r"([1-9]\d{0,4})(?:x([1-9]\d{0,4}))?", mod)
-                if dimensions:
-                    token.attrSet("width", dimensions.group(1))
-                    if dimensions.group(2):
-                        token.attrSet("height", dimensions.group(2))
-                        token.attrSet(
-                            "style", f"aspect-ratio: {dimensions.group(1)} / {dimensions.group(2)}"
-                        )
+                hints, leftover, _token_align = _parse_image_hint_tokens([mod])
+                if hints and not leftover:
+                    if "width" in hints:
+                        token.attrSet("width", hints["width"])
+                    if "height" in hints:
+                        token.attrSet("height", hints["height"])
+                    if "radius" in hints:
+                        token.meta["paper_image_radius"] = hints["radius"]
                 else:
                     label = mod
 
@@ -797,8 +945,42 @@ def render_markdown(
                     src = child.attrGet("src") or ""
                     local_src = src.removeprefix("./")
                     is_obsidian = bool(child.meta.get("paper_obsidian_image"))
-                    if src.startswith(("http://", "https://")):
+                    remote = src.startswith(("http://", "https://", "//"))
+                    hints: dict[str, str] = {}
+                    align = child.meta.get("paper_image_align")
+                    clean_src = src
+
+                    # 尺寸与圆角提示：本地图片可用 ?w=600&h=400&r=16 或 #w=600，远程图片用 #。
+                    if not src.startswith(("data:", "#")):
+                        url_hints, url_align, clean_src = _extract_image_hints(src, remote=remote)
+                        hints.update(url_hints)
+                        align = align or url_align
+                        local_src = clean_src.removeprefix("./")
+
+                    if not is_obsidian:
+                        raw_alt = child.content or ""
+                        label, alt_hints, alt_align = _split_alt_hints(raw_alt)
+                        for key, value in alt_hints.items():
+                            hints.setdefault(key, value)
+                        align = align or alt_align
+                        if label != raw_alt:
+                            child.content = label
+                            text_token = Token("text", "", 0)
+                            text_token.content = label
+                            child.children = [text_token]
+
+                    # Obsidian 嵌入已把尺寸写进属性，这里统一收拢成提示再重新输出。
+                    for attribute in ("width", "height"):
+                        existing = child.attrGet(attribute)
+                        if existing and existing.isdigit() and 0 < int(existing) <= MAX_IMAGE_DIMENSION:
+                            hints.setdefault(attribute, str(int(existing)))
+                    if "radius" not in hints and child.meta.get("paper_image_radius"):
+                        hints["radius"] = str(child.meta["paper_image_radius"])
+
+                    if remote:
                         child.attrSet("referrerpolicy", "no-referrer")
+                        if clean_src != src:
+                            child.attrSet("src", clean_src)
                     elif is_obsidian and import_dir is not None:
                         imported = _import_obsidian_image(local_src, import_dir)
                         if imported:
@@ -806,7 +988,7 @@ def render_markdown(
                         else:
                             child.type = "paper_missing_image"
                             child.tag = "span"
-                            child.content = unquote(local_src.split("#", 1)[0])
+                            child.content = unquote(local_src)
                             child.attrs = {}
                             child.children = None
                             continue
@@ -817,22 +999,31 @@ def render_markdown(
                         if imported:
                             child.attrSet("src", normalized_asset_base + imported)
 
-                    # 提取并设置对齐样式（支持 URL hash 语法，如 image.png#left / image.png#right）
-                    align = child.meta.get("paper_image_align")
-                    if not align and "#" in src:
-                        hash_candidate = src.split("#", 1)[1].strip().lower()
-                        if hash_candidate in {"left", "align-left"}:
-                            align = "left"
-                        elif hash_candidate in {"right", "align-right"}:
-                            align = "right"
-                        elif hash_candidate in {"center", "align-center"}:
-                            align = "center"
-
+                    # 对齐由 hash 片段提供（image.png#left / image.png#right），已在提示解析中收拢。
                     if align:
                         child.attrSet("data-align", align)
                         existing_class = child.attrGet("class") or ""
                         if f"align-{align}" not in existing_class:
                             child.attrSet("class", f"{existing_class} align-{align}".strip())
+
+                    width, height, radius = hints.get("width"), hints.get("height"), hints.get("radius")
+                    if width:
+                        child.attrSet("width", width)
+                    if height:
+                        child.attrSet("height", height)
+                    styles: list[str] = []
+                    if width and height:
+                        styles.append(f"aspect-ratio: {width} / {height}")
+                    elif height:
+                        # 只给高度时高度属性会被 CSS 的 `height: auto` 覆盖，用内联样式锁定。
+                        styles.append(f"height: {height}px")
+                    if radius:
+                        rounded = "9999px" if radius == _IMAGE_FULL_RADIUS else f"{radius}px"
+                        styles.append(f"border-radius: {rounded}")
+                    if styles:
+                        child.attrSet("style", "; ".join(styles))
+                    elif isinstance(child.attrs, dict):
+                        child.attrs.pop("style", None)
 
                     child.attrSet("loading", "lazy")
                     child.attrSet("decoding", "async")
@@ -1063,28 +1254,45 @@ def _feed_icon_url(config: PaperConfig) -> str:
 
 def _css(config: PaperConfig) -> str:
     color = config.color if re.match(r"^#[0-9a-fA-F]{6}$", config.color) else DEFAULT_COLOR
+    radius = image_radius_value(config.image_radius)
     legacy_css = """
 :root {
   --primary: __PAPER_COLOR__;
-  --bg: #ffffff;
+  --bg: __THEME_LIGHT_BG__;
   --text: #111827;
   --subtext: #6b7280;
   --link: #111827;
   --link-underline: #374151;
   --border: #e5e7eb;
   --code-bg: #f9fafb;
+  --image-radius: __PAPER_RADIUS__px;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: __THEME_DARK_BG__;
+  --text: #e4e4e7;
+  --subtext: #71717a;
+  --link: #e4e4e7;
+  --link-underline: #d1d5db;
+  --border: #27272a;
+  --code-bg: #18181b;
+  color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;
+  :root:not([data-theme]) {
+    --bg: __THEME_DARK_BG__;
     --text: #e4e4e7;
     --subtext: #71717a;
     --link: #e4e4e7;
     --link-underline: #d1d5db;
     --border: #27272a;
     --code-bg: #18181b;
+    color-scheme: dark;
   }
 }
+/* 只在切换主题的那一瞬间挂上 .theme-transition，避免影响 hover 等既有过渡。 */
+:root.theme-transition *, :root.theme-transition *::before, :root.theme-transition *::after { transition: background-color __THEME_TRANSITION__s ease-in-out, color __THEME_TRANSITION__s ease-in-out, border-color __THEME_TRANSITION__s ease-in-out, fill __THEME_TRANSITION__s ease-in-out, stroke __THEME_TRANSITION__s ease-in-out !important; }
+@media (prefers-reduced-motion: reduce) { :root.theme-transition *, :root.theme-transition *::before, :root.theme-transition *::after { transition: none !important; } }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -1122,6 +1330,15 @@ blockquote { border-left: 2px solid var(--primary); padding-left: 1rem; color: v
 footer { margin-top: 4rem; text-align: center; }
 .footer-brand { font-family: Georgia, Cambria, Baskerville, "Times New Roman", serif; font-style: italic; font-size: 0.725rem; letter-spacing: 0.04em; color: var(--text); text-decoration: none; opacity: 0.12; transition: opacity 0.2s ease, color 0.2s ease; }
 .footer-brand:hover { opacity: 0.5; color: var(--primary); }
+.footer-row { display: inline-flex; align-items: center; justify-content: center; gap: 0.55rem; }
+.footer-theme { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: none; color: var(--text); opacity: 0.12; cursor: pointer; transition: opacity 0.2s ease, color 0.2s ease; }
+.footer-theme:hover { opacity: 0.5; color: var(--primary); }
+.footer-theme:focus-visible { opacity: 0.6; outline: 2px solid var(--primary); outline-offset: 2px; }
+.footer-theme svg { display: none; width: 0.8rem; height: 0.8rem; }
+.footer-theme .theme-icon-auto { display: block; }
+:root[data-theme="light"] .footer-theme .theme-icon-auto, :root[data-theme="dark"] .footer-theme .theme-icon-auto { display: none; }
+:root[data-theme="light"] .footer-theme .theme-icon-light { display: block; }
+:root[data-theme="dark"] .footer-theme .theme-icon-dark { display: block; }
 .back-icon { position: absolute; left: -2rem; top: 0.41rem; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; color: var(--subtext); text-decoration: none; }
 .back-icon:hover { color: var(--primary); }
 
@@ -1153,7 +1370,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown tbody tr:nth-child(even) td { background-color: var(--code-bg); }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
-.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: 8px; cursor: zoom-in; }
+.markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: var(--image-radius, 8px); cursor: zoom-in; }
 .markdown img[data-align="left"], .markdown img.align-left { margin-left: 0; margin-right: auto; }
 .markdown img[data-align="right"], .markdown img.align-right { margin-left: auto; margin-right: 0; }
 .markdown img[data-align="center"], .markdown img.align-center { margin-inline: auto; }
@@ -1178,7 +1395,14 @@ footer { margin-top: 4rem; text-align: center; }
 """
     pygments_css = _formatter.get_style_defs(".syntax-highlight") if _formatter else ""
     pygments_css += "\n.syntax-highlight { background: transparent !important; }"
-    return legacy_css.replace("__PAPER_COLOR__", color) + "\n" + pygments_css
+    themed = (
+        legacy_css.replace("__PAPER_COLOR__", color)
+        .replace("__PAPER_RADIUS__", str(radius))
+        .replace("__THEME_LIGHT_BG__", THEME_BACKGROUNDS["light"])
+        .replace("__THEME_DARK_BG__", THEME_BACKGROUNDS["dark"])
+        .replace("__THEME_TRANSITION__", f"{THEME_TRANSITION_MS / 1000:g}")
+    )
+    return themed + "\n" + pygments_css
 
 
 def _github_url(config: PaperConfig) -> str:
@@ -1226,6 +1450,45 @@ def _live_reload_script() -> str:
     return """<script>(()=>{let v=null;setInterval(async()=>{try{const r=await fetch('/.paper-revision',{cache:'no-store'});const n=await r.text();if(v===null){v=n}else if(n!==v){location.reload()}}catch(_e){}},1000)})();</script>"""
 
 
+def _theme_bootstrap_script() -> str:
+    """Apply a stored theme choice before the first paint to avoid a flash."""
+
+    return f"""<script>(()=>{{try{{const v=localStorage.getItem('{THEME_STORAGE_KEY}');if(v==='light'||v==='dark'){{document.documentElement.dataset.theme=v}}}}catch(_e){{}}}})();</script>"""
+
+
+_THEME_ICONS = {
+    "light": (
+        '<circle cx="12" cy="12" r="4"/>'
+        '<path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.9 4.9l1.4 1.4"/>'
+        '<path d="M17.7 17.7l1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/>'
+        '<path d="M4.9 19.1l1.4-1.4"/><path d="M17.7 6.3l1.4-1.4"/>'
+    ),
+    "dark": '<path d="M20.5 14.8A8.5 8.5 0 1 1 9.2 3.5a7 7 0 0 0 11.3 11.3z"/>',
+    "auto": '<rect x="2.5" y="4" width="19" height="13" rx="2.5"/><path d="M8.5 20.5h7"/>',
+}
+
+
+def _theme_toggle() -> str:
+    """One quiet footer control that cycles light → dark → follow the system."""
+
+    labels = {mode: html.escape(t(f"theme_{mode}"), quote=True) for mode in ("light", "dark", "auto")}
+    icons = "".join(
+        f'<svg class="theme-icon theme-icon-{mode}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"'
+        f' fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"'
+        f' stroke-linejoin="round" aria-hidden="true">{paths}</svg>'
+        for mode, paths in _THEME_ICONS.items()
+    )
+    return (
+        f'<button type="button" class="footer-theme" aria-label="{labels["auto"]}" title="{labels["auto"]}"'
+        f' data-label-light="{labels["light"]}" data-label-dark="{labels["dark"]}"'
+        f' data-label-auto="{labels["auto"]}">{icons}</button>'
+    )
+
+
+def _theme_toggle_script() -> str:
+    return f"""<script>(()=>{{const b=document.querySelector('.footer-theme');if(!b)return;const root=document.documentElement;const order=['light','dark','auto'];let current='auto',timer=0;try{{const stored=localStorage.getItem('{THEME_STORAGE_KEY}');if(stored==='light'||stored==='dark')current=stored}}catch(_e){{}}const apply=()=>{{if(current==='auto'){{root.removeAttribute('data-theme')}}else{{root.dataset.theme=current}}const label=b.dataset['label'+current[0].toUpperCase()+current.slice(1)]||b.dataset.labelAuto;b.setAttribute('aria-label',label);b.setAttribute('title',label)}};const paint=()=>{{if(matchMedia('(prefers-reduced-motion: reduce)').matches){{apply();return}}clearTimeout(timer);root.classList.add('theme-transition');apply();timer=setTimeout(()=>root.classList.remove('theme-transition'),{THEME_TRANSITION_MS + 20})}};b.addEventListener('click',()=>{{current=order[(order.indexOf(current)+1)%order.length];try{{localStorage.setItem('{THEME_STORAGE_KEY}',current)}}catch(_e){{}}paint()}});const media=matchMedia('(prefers-color-scheme: dark)');if(media.addEventListener)media.addEventListener('change',()=>{{if(current==='auto')paint()}});apply()}})();</script>"""
+
+
 def _image_lightbox() -> str:
     preview_label = html.escape(t("lightbox_preview"), quote=True)
     close_label = html.escape(t("lightbox_close"), quote=True)
@@ -1242,7 +1505,10 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     katex_head = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">'
     katex_scripts = '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:\'$$\',right:\'$$\',display:true},{left:\'$\',right:\'$\',display:false},{left:\'\\\\(\',right:\'\\\\)\',display:false},{left:\'\\\\[\',right:\'\\\\]\',display:true}],throwOnError:false});"></script>'
     html_lang = t("html_lang_code")
-    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a></footer>{lightbox}{script}{katex_scripts}</body></html>"""
+    theme_bootstrap = _theme_bootstrap_script()
+    theme_toggle = _theme_toggle()
+    theme_script = _theme_toggle_script()
+    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -1360,13 +1626,14 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
             _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload))
             rendered_posts: dict[str, str] = {}
-            back_title = html.escape(t("back_to_previous"), quote=True)
+            back_title = html.escape(t("back_to_home"), quote=True)
+            back_href = html.escape(_href(config, "/"), quote=True)
             for post in posts:
                 if not post.published and not include_drafts:
                     continue
                 rendered_content = render_markdown(post.content, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)
                 rendered_posts[post.slug] = rendered_content
-                back_icon = f'<a href="javascript:history.back()" class="back-icon" title="{back_title}" aria-label="{back_title}"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
+                back_icon = f'<a href="{back_href}" class="back-icon" title="{back_title}" aria-label="{back_title}"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
                 article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
                 article += f'<div class="markdown">{rendered_content}</div></article></main>'
                 _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))

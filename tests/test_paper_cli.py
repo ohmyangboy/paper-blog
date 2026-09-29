@@ -388,7 +388,9 @@ class PaperCliTests(unittest.TestCase):
     def test_preview_document_request_triggers_immediate_refresh_only_for_html(self):
         handler = object.__new__(paper_cli._PreviewHandler)
         handler.preview_state = mock.Mock()
-        with mock.patch.object(paper_cli.http.server.SimpleHTTPRequestHandler, "do_GET"):
+        with mock.patch.object(paper_cli.http.server.SimpleHTTPRequestHandler, "do_GET"), mock.patch.object(
+            paper_cli._PreviewHandler, "_wait_for_output"
+        ):
             handler.path = "/posts/draft/"
             handler.do_GET()
             handler.preview_state.request_refresh.assert_called_once_with()
@@ -397,6 +399,28 @@ class PaperCliTests(unittest.TestCase):
             handler.path = "/assets/image.png"
             handler.do_GET()
             handler.preview_state.request_refresh.assert_not_called()
+
+    def test_preview_waits_out_the_output_swap_instead_of_answering_404(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "out"
+            article = output / "posts" / "hello" / "index.html"
+            article.parent.mkdir(parents=True)
+            article.write_text("article", encoding="utf-8")
+
+            handler = object.__new__(paper_cli._PreviewHandler)
+            handler.directory = str(output)
+            handler.preview_base_path = ""
+
+            # 构建交换期间输出目录会短暂消失，等待后应能正常命中
+            handler.path = "/posts/hello/index.html"
+            with mock.patch.object(paper_cli.time, "sleep") as sleep:
+                handler._wait_for_output()
+                sleep.assert_not_called()
+
+            shutil.rmtree(output)
+            with mock.patch.object(paper_cli.time, "sleep") as sleep:
+                handler._wait_for_output()
+                self.assertEqual(sleep.call_count, paper_cli.PREVIEW_SWAP_RETRIES - 1)
 
     def test_preview_maps_github_pages_base_path_to_generated_articles_and_assets(self):
         with tempfile.TemporaryDirectory() as root:
@@ -1195,12 +1219,35 @@ class GitHubRemoteConfigTests(PaperCliTests):
             finally:
                 self._restore_paper_home(old_home)
 
+    def test_config_image_radius_defaults_to_eight_and_can_be_set_directly(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            old_home = self._set_paper_home(root_path)
+            try:
+                self.assertEqual(main(["link", str(root_path / "posts")]), 0)
+                config_file = root_path / ".paper" / "config.json"
+                self.assertEqual(json.loads(config_file.read_text(encoding="utf-8"))["imageRadius"], 8)
+
+                self.assertEqual(main(["config", "radius", "0"]), 0)
+                self.assertEqual(json.loads(config_file.read_text(encoding="utf-8"))["imageRadius"], 0)
+
+                self.assertEqual(main(["config", "image-radius", "20"]), 0)
+                self.assertEqual(json.loads(config_file.read_text(encoding="utf-8"))["imageRadius"], 20)
+
+                # 超出范围或非数字的值会被拒绝，配置保持原样
+                self.assertEqual(main(["config", "radius", "oops"]), 1)
+                self.assertEqual(main(["config", "radius", "900"]), 1)
+                self.assertEqual(json.loads(config_file.read_text(encoding="utf-8"))["imageRadius"], 20)
+            finally:
+                self._restore_paper_home(old_home)
+
     def test_config_subcommand_dispatches_to_leaf(self):
         cases = [
             (["home", "color"], "paper_cli._set_highlight_color"),
             (["home", "icon"], "paper_cli._set_icon"),
             (["home"], "paper_cli.cmd_brand_config"),
             (["editor"], "paper_cli._choose_editor"),
+            (["radius"], "paper_cli._set_image_radius"),
             (["remote"], "paper_cli.cmd_remote_entry"),
             (["status"], "paper_cli.cmd_status"),
             (["test"], "paper_cli.cmd_test_connection"),

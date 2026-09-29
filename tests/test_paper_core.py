@@ -205,6 +205,72 @@ $$
             self.assertIn('data-align="center"', std_center)
             self.assertIn('class="align-center"', std_center)
 
+    def test_markdown_supports_image_size_and_radius_hints(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "photo.png").write_bytes(b"\x89PNG hints")
+
+            query = render_markdown("![pic](photo.png?w=600&h=400)", posts_dir=posts)
+            width_only = render_markdown("![pic](photo.png?w=600)", posts_dir=posts)
+            hash_hints = render_markdown("![pic](photo.png#w=600&r=16)", posts_dir=posts)
+            alt_suffix = render_markdown("![pic|600x400|center](photo.png)", posts_dir=posts)
+            alt_radius = render_markdown("![pic|r=24](photo.png)", posts_dir=posts)
+            pill = render_markdown("![pic](photo.png?r=full)", posts_dir=posts)
+            square = render_markdown("![pic](photo.png#r=0)", posts_dir=posts)
+            obsidian = render_markdown("![[photo.png|300x200|r=20|right]]", posts_dir=posts)
+
+            # 本地图片的 ?w=&h= 会被解析并从资源地址上移除
+            self.assertIn('src="/assets/photo.png"', query)
+            self.assertIn('width="600"', query)
+            self.assertIn('height="400"', query)
+            self.assertIn('style="aspect-ratio: 600 / 400"', query)
+            self.assertNotIn("?", query)
+            self.assertIn('width="600"', width_only)
+            self.assertNotIn("height=", width_only)
+
+            # 只给高度时用内联样式，否则 CSS 的 height:auto 会让高度属性失效
+            height_only = render_markdown("![pic](photo.png?h=400)", posts_dir=posts)
+            height_with_radius = render_markdown("![pic](photo.png?h=400&r=12)", posts_dir=posts)
+            self.assertIn('style="height: 400px"', height_only)
+            self.assertIn('style="height: 400px; border-radius: 12px"', height_with_radius)
+
+            # # 片段同时支持尺寸、圆角与对齐
+            self.assertIn('width="600"', hash_hints)
+            self.assertIn('style="border-radius: 16px"', hash_hints)
+            self.assertNotIn("w=600", hash_hints)
+
+            # alt 后缀（Obsidian 风格）与圆角
+            self.assertIn('width="600"', alt_suffix)
+            self.assertIn('height="400"', alt_suffix)
+            self.assertIn('data-align="center"', alt_suffix)
+            self.assertNotIn("600x400", alt_suffix)
+            self.assertIn('style="border-radius: 24px"', alt_radius)
+            self.assertIn('style="border-radius: 9999px"', pill)
+            self.assertIn('style="border-radius: 0px"', square)
+
+            # Obsidian 嵌入的圆角与尺寸共存
+            self.assertIn('style="aspect-ratio: 300 / 200; border-radius: 20px"', obsidian)
+            self.assertIn('data-align="right"', obsidian)
+
+            # 非尺寸后缀仍然是普通替代文本
+            caption = render_markdown("![封面|第一张图](photo.png)", posts_dir=posts)
+            self.assertIn('alt="封面|第一张图"', caption)
+
+    def test_markdown_keeps_remote_query_and_reads_hash_hints_only(self):
+        hotlink = render_markdown("![cover](https://cdn.example.test/a.png?w=1200&q=80)")
+        sized = render_markdown("![cover](https://cdn.example.test/a.png#w=600&h=400)")
+        aligned = render_markdown("![cover](https://cdn.example.test/a.png#left)")
+
+        # 远程图片的查询串属于图片服务本身，必须原样保留
+        self.assertIn('src="https://cdn.example.test/a.png?w=1200&amp;q=80"', hotlink)
+        self.assertNotIn('width="1200"', hotlink)
+
+        self.assertIn('src="https://cdn.example.test/a.png"', sized)
+        self.assertIn('width="600"', sized)
+        self.assertIn('height="400"', sized)
+        self.assertIn('data-align="left"', aligned)
+        self.assertIn('src="https://cdn.example.test/a.png"', aligned)
+
     def test_markdown_shows_placeholder_for_missing_obsidian_image(self):
         with tempfile.TemporaryDirectory() as root:
             rendered = render_markdown("前文\n\n![[missing image.png]]\n\n后文", posts_dir=Path(root))
@@ -629,14 +695,62 @@ $$
             self.assertIn('<div class="writing-header"><h2>Writing</h2><a href="/rss.xml" class="footer-brand">RSS</a></div>', home)
             self.assertIn(
                 'href="https://ohmyangboy.github.io/paper-blog/" target="_blank" '
-                'rel="noopener noreferrer" class="footer-brand">Paper Blog</a></footer>',
+                'rel="noopener noreferrer" class="footer-brand">Paper Blog</a>',
                 home,
             )
+            self.assertIn('class="footer-row"', home)
+            self.assertIn('class="footer-theme"', home)
+            self.assertIn('data-label-auto="跟随系统主题"', home)
             self.assertIn('font-family: Georgia, Cambria, Baskerville', home)
             self.assertIn('rel="icon"', home)
             self.assertIn('/assets/paper-blog-favicon.png', home)
             self.assertTrue((output / "assets" / "paper-blog-favicon.png").exists())
             self.assertIn('/.paper-revision', home)
+
+    def test_build_site_links_back_home_and_ships_theme_controls(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            posts = root_path / "posts"
+            posts.mkdir()
+            (posts / "first-post.md").write_text(
+                "---\ntitle: First\ndate: 2026-08-29\npublished: true\n---\n\nBody\n",
+                encoding="utf-8",
+            )
+            output = build_site(
+                PaperConfig(
+                    posts_dir=posts,
+                    site_dir=root_path / "site",
+                    site_url="https://alice.github.io/blog",
+                    image_radius=14,
+                )
+            )
+            article = (output / "posts" / "first-post" / "index.html").read_text(encoding="utf-8")
+            index = (output / "index.html").read_text(encoding="utf-8")
+
+            # 二级页返回的是博客首页，而不是浏览器历史里的上一页
+            self.assertIn('<a href="/blog/" class="back-icon"', article)
+            self.assertIn('aria-label="返回首页"', article)
+            self.assertNotIn("history.back()", article)
+
+            # 主题切换：手动 light/dark 覆盖 + 未选择时跟随系统
+            self.assertIn(':root[data-theme="dark"]', index)
+            self.assertIn(":root:not([data-theme])", index)
+            self.assertIn('class="footer-theme"', index)
+            self.assertIn("paper-theme", index)
+            self.assertIn('class="theme-icon theme-icon-light"', index)
+            self.assertIn('class="theme-icon theme-icon-dark"', index)
+            self.assertIn('class="theme-icon theme-icon-auto"', index)
+            self.assertIn("prefers-color-scheme: dark", index)
+
+            # 主题切换走 ease-in-out 过渡，且尊重「减少动态效果」
+            self.assertIn(":root.theme-transition *", index)
+            self.assertIn("transition: background-color 0.4s ease-in-out", index)
+            self.assertIn("prefers-reduced-motion: reduce", index)
+            self.assertIn("root.classList.add('theme-transition')", index)
+
+            # 圆角配置进入 CSS 变量，供所有 Markdown 图片使用
+            self.assertIn("--image-radius: 14px", index)
+            self.assertIn("border-radius: var(--image-radius, 8px)", index)
 
     def test_writing_rss_link_respects_site_base_path(self):
         with tempfile.TemporaryDirectory() as root:

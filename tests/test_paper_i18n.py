@@ -161,7 +161,7 @@ class PaperI18nTests(unittest.TestCase):
 
         post_en = (site_dir / "out" / "posts" / "post-1" / "index.html").read_text(encoding="utf-8")
         self.assertIn("Draft Preview", post_en)
-        self.assertIn('aria-label="Back to previous page"', post_en)
+        self.assertIn('aria-label="Back to home"', post_en)
         self.assertIn("Image not found: nonexistent.png", post_en)
 
         # 2. Build in Chinese
@@ -183,7 +183,9 @@ class PaperI18nTests(unittest.TestCase):
 
         post_zh = (site_dir / "out" / "posts" / "post-1" / "index.html").read_text(encoding="utf-8")
         self.assertIn("草稿预览", post_zh)
-        self.assertIn('aria-label="返回上一页"', post_zh)
+        self.assertIn('aria-label="返回首页"', post_zh)
+        self.assertIn('class="footer-theme"', post_zh)
+        self.assertIn('data-label-auto="跟随系统主题"', post_zh)
         self.assertIn("图片未找到：nonexistent.png", post_zh)
 
     def test_cli_parser_i18n(self):

@@ -33,7 +33,9 @@ from paper_runtime.core import (
     ConfigError,
     DEFAULT_COLOR,
     DEFAULT_ICON,
+    DEFAULT_IMAGE_RADIUS,
     DEFAULT_INDEX,
+    MAX_IMAGE_RADIUS,
     GitRemoteInfo,
     PaperConfig,
     Post,
@@ -69,6 +71,8 @@ RESET = "\033[0m"
 PAPER_BANNER = f"  {TERRACOTTA}Paper{RESET} {BOLD}Blog{RESET}"
 PREVIEW_POLL_SECONDS = 0.5
 PREVIEW_DEBOUNCE_SECONDS = 2.0
+PREVIEW_SWAP_RETRIES = 6
+PREVIEW_SWAP_RETRY_SECONDS = 0.05
 UPDATE_CHECK_TTL_SECONDS = 6 * 60 * 60
 UPDATE_FORMULA_RAW_URL = "https://raw.githubusercontent.com/ohmyangboy/homebrew-tap/main/Formula/paper.rb"
 UPDATE_RELEASES_URL = "https://api.github.com/repos/ohmyangboy/paper-blog/releases?per_page=10"
@@ -529,6 +533,43 @@ def _set_image_compression(config: PaperConfig, state: str | None = None) -> Pap
     return saved
 
 
+def _parse_image_radius(value: str) -> int | None:
+    raw = str(value).strip()
+    if raw.isdigit() and int(raw) <= MAX_IMAGE_RADIUS:
+        return int(raw)
+    return None
+
+
+def _set_image_radius(config: PaperConfig, value: str | None = None) -> PaperConfig:
+    """Set the default Markdown image corner radius used by the generated site."""
+
+    if value is None:
+        presets = [0, 4, DEFAULT_IMAGE_RADIUS, 12, 16, 24]
+        options: list[tuple[str, str, str]] = []
+        for preset in presets:
+            if preset == 0:
+                label = t("image_radius_opt_square")
+            elif preset == DEFAULT_IMAGE_RADIUS:
+                label = t("image_radius_opt_default", radius=preset)
+            else:
+                label = f"{preset}px"
+            options.append((str(preset), str(preset), label))
+        options.append(("custom", "custom", t("image_radius_opt_custom")))
+        options.append(("back", "back", t("brand_icon_opt_back")))
+        value = _terminal_menu(t("image_radius_menu_title"), options)
+        if value == "custom":
+            value = _prompt(t("image_radius_prompt"))
+    if value is None or value == "back":
+        return config
+    radius = _parse_image_radius(value)
+    if radius is None:
+        _error(t("image_radius_invalid"), 1)
+        return config
+    saved = save_config(config, image_radius=radius)
+    print(t("image_radius_set", radius=radius))
+    return saved
+
+
 def _set_language(config: PaperConfig, lang_code: str | None = None) -> PaperConfig:
     if lang_code is None:
         lang_code = _terminal_menu(
@@ -573,6 +614,7 @@ def cmd_config(
     config_cmd: str | None = None,
     home_cmd: str | None = None,
     compress_cmd: str | None = None,
+    radius_cmd: str | None = None,
     editor_name: str | None = None,
     lang_code: str | None = None,
     local: bool = False,
@@ -582,7 +624,7 @@ def cmd_config(
     if config is None:
         return 2
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code, radius_cmd)
     if not sys.stdin.isatty():
         pages = t("pages_need_remote")
         if config.git_remote:
@@ -595,6 +637,7 @@ def cmd_config(
             f"{t('brand_item_color')}：{config.color}\n"
             f"{t('brand_item_icon')}：{t('status_out_exists') if config.icon else t('status_not_set')}\n"
             f"{t('config_item_compress')}：{t('state_on') if config.compress else t('state_off')}\n"
+            f"{t('config_item_image_radius')}：{config.image_radius}px\n"
             f"{t('config_item_language')}：{config.language}\n"
             f"{t('status_remote', remote=config.git_remote or t('status_not_set'))}\n"
             f"{t('status_pages_url', url=pages)}"
@@ -610,6 +653,7 @@ def cmd_config(
             [
                 ("home", "home", t("config_item_brand_desc")),
                 ("compress", "compress", f"{t('config_item_compress')} · {t('state_on') if config.compress else t('state_off')}"),
+                ("radius", "radius", t("config_current_image_radius", radius=config.image_radius)),
                 ("editor", "editor", t("config_current_editor", editor=config.editor)),
                 ("language", "language", t("config_current_language", lang=lang_display)),
                 ("link", "link", str(config.posts_dir)),
@@ -627,6 +671,8 @@ def cmd_config(
             config = _require_linked(local=local, local_dir=local_dir) or config
         elif action == "compress":
             config = _set_image_compression(config)
+        elif action == "radius":
+            config = _set_image_radius(config)
         elif action == "editor":
             config = _choose_editor(config)
         elif action == "language":
@@ -656,6 +702,7 @@ def _run_config_leaf(
     compress_cmd: str | None,
     editor_name: str | None = None,
     lang_code: str | None = None,
+    radius_cmd: str | None = None,
 ) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
     if config_cmd == "home":
@@ -681,6 +728,11 @@ def _run_config_leaf(
         return 0
     if config_cmd == "compress":
         _set_image_compression(config, compress_cmd)
+        return 0
+    if config_cmd in {"radius", "image-radius"}:
+        if radius_cmd is not None and _parse_image_radius(radius_cmd) is None:
+            return _error(t("image_radius_invalid"), 1)
+        _set_image_radius(config, radius_cmd)
         return 0
     if config_cmd == "link":
         return cmd_link(None)
@@ -1453,7 +1505,21 @@ class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
             return
         if self.preview_state and (request_path.endswith("/") or request_path.endswith(".html")):
             self.preview_state.request_refresh()
+        self._wait_for_output()
         super().do_GET()
+
+    def _wait_for_output(self) -> None:
+        """Rebuilds swap the output directory; wait out the gap instead of answering 404.
+
+        The swap renames `out` away before the fresh tree takes its place, so a request
+        landing in that window would see a missing path even though the site is fine.
+        """
+
+        for attempt in range(PREVIEW_SWAP_RETRIES):
+            if os.path.exists(self.translate_path(self.path)):
+                return
+            if attempt < PREVIEW_SWAP_RETRIES - 1:
+                time.sleep(PREVIEW_SWAP_RETRY_SECONDS)
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
@@ -2167,6 +2233,9 @@ def make_parser() -> argparse.ArgumentParser:
     compress = config_sub.add_parser("compress", help=t("config_item_compress"))
     compress.add_argument("compress_cmd", nargs="?", choices=["on", "off"])
     _add_common_options(compress)
+    c_radius = config_sub.add_parser("radius", aliases=["image-radius"], help=t("config_item_image_radius"))
+    c_radius.add_argument("radius_cmd", nargs="?", help=t("image_radius_prompt"))
+    _add_common_options(c_radius)
     c_lang = config_sub.add_parser("lang", aliases=["language"], help=t("config_item_language"))
     c_lang.add_argument("lang_code", nargs="?", choices=["zh", "en", "zh_CN", "en_US", "auto", "system"])
     _add_common_options(c_lang)
@@ -2303,6 +2372,7 @@ def _main(argv: list[str] | None = None) -> int:
             config_cmd=getattr(args, "config_cmd", None),
             home_cmd=getattr(args, "home_cmd", None),
             compress_cmd=getattr(args, "compress_cmd", None),
+            radius_cmd=getattr(args, "radius_cmd", None),
             editor_name=getattr(args, "editor_name", None),
             lang_code=getattr(args, "lang_code", None),
             local=local,
