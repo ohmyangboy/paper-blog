@@ -73,7 +73,7 @@ from paper_runtime.preview import (
     restart_preview,
 )
 
-VERSION = "0.1.3-beta.2"
+VERSION = "0.1.3-beta.3"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
