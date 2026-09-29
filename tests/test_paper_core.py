@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -19,9 +20,14 @@ from paper_runtime.core import (
     build_site,
     discover_posts,
     load_config,
+    load_local_config,
     normalize_git_remote,
     parse_frontmatter,
+    register_project,
+    registered_projects,
     render_markdown,
+    save_config,
+    projects_registry_dir,
 )
 from paper_runtime.i18n import get_current_language, set_current_language
 
@@ -1014,6 +1020,65 @@ class TestGitRemoteUrlDerivation(unittest.TestCase):
         self.assertEqual(info.pages_settings_url, "https://github.com/o/r/settings/pages")
         user = normalize_git_remote("git@github.com:o/o.github.io.git")
         self.assertEqual(user.pages_settings_url, "https://github.com/o/o.github.io/settings/pages")
+
+
+class TestProjectRegistry(unittest.TestCase):
+    def setUp(self):
+        self._orig_home = os.environ.get("PAPER_HOME")
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="paper-registry-"))
+        os.environ["PAPER_HOME"] = str(self.temp_dir / ".paper")
+        self.addCleanup(self._restore_home)
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+
+    def _restore_home(self):
+        if self._orig_home is None:
+            os.environ.pop("PAPER_HOME", None)
+        else:
+            os.environ["PAPER_HOME"] = self._orig_home
+
+    def _make_project(self, name: str = "my-blog") -> Path:
+        project = self.temp_dir / name
+        (project / "posts").mkdir(parents=True)
+        (project / "posts" / "hello.md").write_text("# Hello", encoding="utf-8")
+        save_config(load_local_config(project))
+        return project
+
+    def test_register_project_symlinks_config_into_global_home(self):
+        project = self._make_project()
+        link = register_project(load_local_config(project))
+        self.assertIsNotNone(link)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.parent, projects_registry_dir())
+        self.assertEqual(link.resolve(), (project / ".paper-config.json").resolve())
+
+    def test_registered_projects_lists_live_projects(self):
+        project = self._make_project()
+        register_project(load_local_config(project))
+        projects = registered_projects()
+        self.assertEqual(len(projects), 1)
+        self.assertEqual(projects[0].name, "my-blog")
+        self.assertEqual(projects[0].path, project.resolve())
+        self.assertEqual(projects[0].config.posts_dir, (project / "posts").resolve())
+
+    def test_deleted_project_disappears_from_registry(self):
+        project = self._make_project()
+        register_project(load_local_config(project))
+        shutil.rmtree(project)
+        self.assertEqual(registered_projects(), [])
+
+    def test_removed_config_disappears_from_registry(self):
+        project = self._make_project()
+        register_project(load_local_config(project))
+        (project / ".paper-config.json").unlink()
+        self.assertEqual(registered_projects(), [])
+
+    def test_register_project_is_idempotent(self):
+        project = self._make_project()
+        first = register_project(load_local_config(project))
+        second = register_project(load_local_config(project))
+        self.assertEqual(first, second)
+        self.assertEqual(len(list(projects_registry_dir().iterdir())), 1)
+        self.assertEqual(len(registered_projects()), 1)
 
 
 if __name__ == "__main__":

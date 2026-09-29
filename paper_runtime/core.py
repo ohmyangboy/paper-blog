@@ -45,6 +45,7 @@ PAPER_PROJECT_URL = "https://ohmyangboy.github.io/paper-blog/"
 IMAGE_COMPRESSION_MIN_BYTES = 256 * 1024
 DEFAULT_ICON = "paper:default"
 DEFAULT_ICON_FILENAME = "paper-blog-favicon.png"
+PROJECTS_DIRNAME = "projects"
 DEFAULT_IMAGE_RADIUS = 8
 MAX_IMAGE_RADIUS = 512
 MAX_IMAGE_DIMENSION = 10000
@@ -382,6 +383,114 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
+
+
+@dataclass(frozen=True)
+class RegisteredProject:
+    """A local project whose config file is linked into the global Paper home."""
+
+    name: str
+    path: Path
+    config_path: Path
+    link_path: Path
+    config: PaperConfig
+
+
+def projects_registry_dir() -> Path:
+    """Global directory that mirrors every registered local project config."""
+
+    return paper_home() / PROJECTS_DIRNAME
+
+
+def _project_link_name(base_dir: Path) -> str:
+    digest = hashlib.sha1(str(base_dir).encode("utf-8")).hexdigest()[:8]
+    safe_name = _SAFE_SLUG.sub("-", base_dir.name).strip("-") or "project"
+    return f"{safe_name[:48]}-{digest}.json"
+
+
+def _project_root_for_config(config_file: Path) -> Path:
+    parent = config_file.parent
+    return parent.parent if parent.name == ".paper" else parent
+
+
+def register_project(config: PaperConfig) -> Path | None:
+    """Symlink a local project's config into the global registry directory.
+
+    The registry stores links instead of copies, so a project that is deleted
+    or moved simply leaves a dangling link behind and drops out of
+    :func:`registered_projects` without any extra bookkeeping.
+    """
+
+    config_file = config.config_path
+    if config_file is None:
+        return None
+    config_file = Path(config_file).expanduser()
+    if not config_file.is_file():
+        try:
+            save_config(config)
+        except (OSError, ConfigError):
+            return None
+    try:
+        resolved_config = config_file.resolve()
+        base_dir = _project_root_for_config(resolved_config)
+        registry = projects_registry_dir()
+        registry.mkdir(parents=True, exist_ok=True)
+        link_path = registry / _project_link_name(base_dir)
+        if link_path.is_symlink():
+            try:
+                if Path(os.readlink(link_path)).expanduser().resolve() == resolved_config:
+                    return link_path
+            except (OSError, RuntimeError):
+                pass
+            link_path.unlink()
+        elif link_path.exists():
+            link_path.unlink()
+        link_path.symlink_to(resolved_config)
+    except (OSError, RuntimeError):
+        return None
+    return link_path
+
+
+def registered_projects() -> list[RegisteredProject]:
+    """List the live projects in the registry, ignoring dangling links."""
+
+    registry = projects_registry_dir()
+    if not registry.is_dir():
+        return []
+    try:
+        links = sorted(registry.iterdir())
+    except OSError:
+        return []
+    projects: list[RegisteredProject] = []
+    seen: set[Path] = set()
+    for link in links:
+        if link.name.startswith("."):
+            continue
+        try:
+            target = link.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if not target.is_file():
+            continue
+        base_dir = _project_root_for_config(target)
+        if not base_dir.is_dir() or base_dir in seen:
+            continue
+        try:
+            config = load_local_config(base_dir)
+        except ConfigError:
+            continue
+        seen.add(base_dir)
+        projects.append(
+            RegisteredProject(
+                name=base_dir.name,
+                path=base_dir,
+                config_path=config.config_path or target,
+                link_path=link,
+                config=config,
+            )
+        )
+    projects.sort(key=lambda project: (project.name.lower(), str(project.path)))
+    return projects
 
 
 def _parse_scalar(value: str) -> Any:

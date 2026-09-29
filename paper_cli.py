@@ -6,14 +6,12 @@ from __future__ import annotations
 import argparse
 import atexit
 import datetime as dt
-import http.server
 import json
 import math
 import os
 import re
 import select
 import shutil
-import socketserver
 import subprocess
 import sys
 import termios
@@ -21,9 +19,8 @@ import threading
 import time
 import tty
 import unicodedata
-import webbrowser
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from urllib.parse import quote
@@ -48,6 +45,8 @@ from paper_runtime.core import (
     load_local_config,
     normalize_git_remote,
     parse_frontmatter,
+    register_project,
+    registered_projects,
     save_config,
     set_post_published,
 )
@@ -60,6 +59,19 @@ from paper_runtime.i18n import (
     set_current_language,
     t,
 )
+from paper_runtime.preview import (
+    DEFAULT_PREVIEW_PORT,
+    PREVIEW_SWAP_RETRIES,
+    PreviewHandle,
+    _PreviewHandler,
+    _PreviewServer,
+    _PreviewState,
+    _open_browser,
+    _watch_preview,
+    acquire_preview,
+    release_preview,
+    restart_preview,
+)
 
 VERSION = "0.1.3-beta.2"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
@@ -69,10 +81,6 @@ BOLD = "\033[1m"
 GRAY = "\033[90m"
 RESET = "\033[0m"
 PAPER_BANNER = f"  {TERRACOTTA}Paper{RESET} {BOLD}Blog{RESET}"
-PREVIEW_POLL_SECONDS = 0.5
-PREVIEW_DEBOUNCE_SECONDS = 2.0
-PREVIEW_SWAP_RETRIES = 6
-PREVIEW_SWAP_RETRY_SECONDS = 0.05
 UPDATE_CHECK_TTL_SECONDS = 6 * 60 * 60
 UPDATE_FORMULA_RAW_URL = "https://raw.githubusercontent.com/ohmyangboy/homebrew-tap/main/Formula/paper.rb"
 UPDATE_RELEASES_URL = "https://api.github.com/repos/ohmyangboy/paper-blog/releases?per_page=10"
@@ -113,79 +121,21 @@ def _restore_terminal_screen() -> None:
 
 atexit.register(_restore_terminal_screen)
 
-
-@dataclass
-class _PreviewState:
-    revision: int = 0
-    error: str = ""
-    refresh_requested: threading.Event = field(default_factory=threading.Event, repr=False)
-    refresh_completed: threading.Event = field(default_factory=threading.Event, repr=False)
-    watcher_ready: threading.Event = field(default_factory=threading.Event, repr=False)
-
-    def bump(self) -> None:
-        self.revision += 1
-        self.error = ""
-
-    def request_refresh(self, *, timeout: float = 5.0) -> bool:
-        """Ask the watcher to process pending changes before serving a document."""
-
-        self.refresh_completed.clear()
-        self.refresh_requested.set()
-        return self.refresh_completed.wait(timeout)
-
-    def finish_refresh(self) -> None:
-        self.refresh_requested.clear()
-        self.refresh_completed.set()
+_PREVIEW_URL = ""
 
 
-def _source_snapshot(posts_dir: Path) -> tuple[tuple[str, int, int], ...]:
-    if not posts_dir.exists():
-        return ()
-    snapshot = []
-    for path in sorted(posts_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        snapshot.append((str(path.relative_to(posts_dir)), stat.st_mtime_ns, stat.st_size))
-    return tuple(snapshot)
+def _set_preview_url(url: str | None) -> None:
+    """Remember the active folder preview URL so every menu can show it."""
+
+    global _PREVIEW_URL
+    _PREVIEW_URL = url or ""
 
 
-def _watch_preview(config: PaperConfig, state: _PreviewState, stop: threading.Event) -> None:
-    """Poll sources and batch rebuilds after the current editing burst settles."""
-
-    previous = _source_snapshot(config.posts_dir)
-    state.watcher_ready.set()
-    pending_since: float | None = None
-    while not stop.is_set():
-        refresh_now = state.refresh_requested.wait(PREVIEW_POLL_SECONDS)
-        if stop.is_set():
-            break
-        current = _source_snapshot(config.posts_dir)
-        if current != previous:
-            previous = current
-            pending_since = time.monotonic()
-        should_rebuild = pending_since is not None and (
-            refresh_now or time.monotonic() - pending_since >= PREVIEW_DEBOUNCE_SECONDS
-        )
-        if not should_rebuild:
-            if refresh_now:
-                state.finish_refresh()
-            continue
-        try:
-            build_site(config, include_drafts=True, live_reload=True)
-        except Exception as exc:  # keep serving the last good output
-            state.error = str(exc)
-            print(t("serve_rebuild_failed", exc=exc), file=sys.stderr)
-        else:
-            state.bump()
-            print(t("serve_reloaded"))
-        finally:
-            pending_since = None
-            if refresh_now:
-                state.finish_refresh()
+def _banner_lines() -> list[str]:
+    lines = [PAPER_BANNER]
+    if _PREVIEW_URL:
+        lines.append(f"  {TERRACOTTA}{t('dashboard_preview_url', url=_PREVIEW_URL)}{RESET}")
+    return lines
 
 
 def _error(message: str, code: int = 2) -> int:
@@ -236,9 +186,13 @@ def _terminal_menu(
         sys.stdout.write("\033[?25l")
         while True:
             _clear_screen()
-            print(PAPER_BANNER)
+            print("\n".join(_banner_lines()))
             print(f"\n  {title}\n")
-            start, end = _menu_window(len(options), selected, reserved_lines=7 + title.count("\n") + bool(footer_message))
+            start, end = _menu_window(
+                len(options),
+                selected,
+                reserved_lines=7 + title.count("\n") + bool(footer_message) + bool(_PREVIEW_URL),
+            )
             if start:
                 print(f"{GRAY}{t('menu_more_above', count=start)}{RESET}")
             for index in range(start, end):
@@ -293,9 +247,9 @@ def _terminal_multiselect(title: str, options: list[tuple[str, str, str]]) -> li
         sys.stdout.write("\033[?25l")
         while True:
             _clear_screen()
-            print(PAPER_BANNER)
+            print("\n".join(_banner_lines()))
             print(f"\n  {title}\n")
-            start, end = _menu_window(len(options), selected_index, reserved_lines=7 + title.count("\n"))
+            start, end = _menu_window(len(options), selected_index, reserved_lines=7 + title.count("\n") + bool(_PREVIEW_URL))
             if start:
                 print(f"{GRAY}{t('menu_more_above', count=start)}{RESET}")
             for index in range(start, end):
@@ -338,14 +292,24 @@ def _has_config() -> bool:
     return config_path().exists()
 
 
+def _sync_local_registration(config: PaperConfig) -> Path | None:
+    """Keep the global project library in sync for initialized local projects."""
+
+    if config.config_path is None or not config.config_path.is_file():
+        return None
+    return register_project(config)
+
+
 def _require_linked(local: bool = False, local_dir: Path | str | None = None) -> PaperConfig | None:
     if local or local_dir is not None:
         target_dir = Path(local_dir or ".").expanduser().resolve()
         try:
-            return load_local_config(target_dir)
+            config = load_local_config(target_dir)
         except ConfigError as exc:
             _error(str(exc))
             return None
+        _sync_local_registration(config)
+        return config
     if not _has_config():
         _error(t("error_not_linked"))
         return None
@@ -354,6 +318,22 @@ def _require_linked(local: bool = False, local_dir: Path | str | None = None) ->
     except ConfigError as exc:
         _error(str(exc))
         return None
+
+
+def _project_post_count(config: PaperConfig) -> int:
+    """Count Markdown posts (excluding the homepage) for a project overview."""
+
+    try:
+        return sum(1 for path in config.posts_dir.glob("*.md") if path.name != "index.md")
+    except OSError:
+        return 0
+
+
+def _short_path(path: Path) -> str:
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
 
 
 def _folder_picker() -> Path | None:
@@ -1195,6 +1175,12 @@ def cmd_init(local: bool = False, local_dir: Path | str | None = None) -> int:
         posts_dir = config.posts_dir
         print(f"\n📁 【{t('init_mode_label_local')}】{t('status_site_dir', path=config.site_dir)}")
         print(f"📁 {t('status_posts_dir', path=posts_dir)}")
+        if config.config_path is None or not config.config_path.is_file():
+            config = save_config(config)
+        if register_project(config) is not None:
+            print(t("all_registered", path=config.config_path))
+        else:
+            print(t("all_register_failed", path=config.config_path))
     else:
         try:
             config = load_config()
@@ -1462,6 +1448,53 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
             _pause()
 
 
+def cmd_all() -> int:
+    """Browse every project registered in the global Paper home."""
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    projects = registered_projects()
+    if not interactive:
+        if not projects:
+            print(t("all_empty"))
+            return 0
+        print(t("all_list_header", count=len(projects)))
+        for project in projects:
+            print(
+                t(
+                    "all_list_line",
+                    name=project.name,
+                    path=project.path,
+                    count=_project_post_count(project.config),
+                )
+            )
+        return 0
+
+    while True:
+        projects = registered_projects()
+        if not projects:
+            print(t("all_empty"))
+            return 0
+        options = [
+            (
+                str(project.path),
+                project.name,
+                t(
+                    "all_project_meta",
+                    path=_short_path(project.path),
+                    count=_project_post_count(project.config),
+                ),
+            )
+            for project in projects
+        ] + [("back", t("back"), t("config_item_back"))]
+        selected = _terminal_menu(t("all_header", count=len(projects)), options)
+        if selected in {None, "back"}:
+            return 0
+        project = next((item for item in projects if str(item.path) == selected), None)
+        if project is None:
+            continue
+        run_dashboard(local=True, local_dir=project.path)
+
+
 def cmd_build(preview: bool = False, local: bool = False, local_dir: Path | str | None = None) -> int:
     config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
@@ -1471,73 +1504,7 @@ def cmd_build(preview: bool = False, local: bool = False, local_dir: Path | str 
     return 0
 
 
-class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
-    preview_state: _PreviewState | None = None
-
-    def __init__(self, *args: object, base_path: str = "", **kwargs: object) -> None:
-        self.preview_base_path = base_path.rstrip("/")
-        super().__init__(*args, **kwargs)
-
-    def translate_path(self, path: str) -> str:
-        """Mount generated output at its GitHub Pages base path during preview."""
-
-        request_path, separator, query = path.partition("?")
-        base_path = self.preview_base_path
-        if base_path and (request_path == base_path or request_path.startswith(base_path + "/")):
-            request_path = request_path[len(base_path):] or "/"
-            path = request_path + (separator + query if separator else "")
-        return super().translate_path(path)
-
-    def log_message(self, _format: str, *_args: object) -> None:
-        return
-
-    def do_GET(self) -> None:
-        request_path = self.path.split("?", 1)[0]
-        if request_path == "/.paper-revision":
-            revision = self.preview_state.revision if self.preview_state else 0
-            payload = str(revision).encode("ascii")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        if self.preview_state and (request_path.endswith("/") or request_path.endswith(".html")):
-            self.preview_state.request_refresh()
-        self._wait_for_output()
-        super().do_GET()
-
-    def _wait_for_output(self) -> None:
-        """Rebuilds swap the output directory; wait out the gap instead of answering 404.
-
-        The swap renames `out` away before the fresh tree takes its place, so a request
-        landing in that window would see a missing path even though the site is fine.
-        """
-
-        for attempt in range(PREVIEW_SWAP_RETRIES):
-            if os.path.exists(self.translate_path(self.path)):
-                return
-            if attempt < PREVIEW_SWAP_RETRIES - 1:
-                time.sleep(PREVIEW_SWAP_RETRY_SECONDS)
-
-    def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
-        super().end_headers()
-
-
-class _PreviewServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
-
-
-def _open_browser(url: str) -> bool:
-    try:
-        return bool(webbrowser.open(url))
-    except webbrowser.Error:
-        return False
-
-
-def cmd_serve(port: int = 8000, local: bool = False, local_dir: Path | str | None = None) -> int:
+def cmd_serve(port: int = DEFAULT_PREVIEW_PORT, local: bool = False, local_dir: Path | str | None = None) -> int:
     config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
@@ -2180,6 +2147,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"paper {VERSION}")
     parser.add_argument("-l", "--local", action="store_true", help=t("help_local"))
     parser.add_argument("-C", "--dir", type=str, default=None, help=t("help_dir"))
+    parser.add_argument("-a", "--all", action="store_true", help=t("help_cmd_all"))
     parser.add_argument("--lang", "--language", type=str, default=None, choices=["zh", "en", "zh_CN", "en_US", "auto"], help=t("help_lang"))
 
     def _add_common_options(subparser: argparse.ArgumentParser) -> None:
@@ -2194,6 +2162,9 @@ def make_parser() -> argparse.ArgumentParser:
     link = commands.add_parser("link", help=t("help_cmd_link"))
     link.add_argument("path", nargs="?")
     _add_common_options(link)
+
+    all_p = commands.add_parser("all", help=t("help_cmd_all"))
+    _add_common_options(all_p)
 
     new = commands.add_parser("new", help=t("help_cmd_new"))
     new.add_argument("title", nargs="?")
@@ -2260,13 +2231,88 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _dashboard_config(local: bool, local_dir: Path | str | None) -> PaperConfig | None:
+    """Resolve the dashboard's config without erroring when nothing is linked."""
+
+    try:
+        if local or local_dir is not None:
+            return load_local_config(local_dir or ".")
+        if _has_config():
+            return load_config()
+    except (ConfigError, OSError):
+        return None
+    return None
+
+
+def _start_dashboard_preview(config: PaperConfig | None, *, local: bool, local_dir: Path | str | None) -> PreviewHandle | None:
+    """Bring up (or reuse) the folder's background preview on console entry."""
+
+    _set_preview_url("")
+    if config is None or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    try:
+        handle = acquire_preview(
+            config,
+            local=bool(local or local_dir is not None),
+            local_dir=local_dir,
+        )
+    except Exception:
+        return None
+    _set_preview_url(handle.url if handle else "")
+    return handle
+
+
+def _restart_dashboard_preview(config: PaperConfig | None, *, local: bool, local_dir: Path | str | None) -> PreviewHandle | None:
+    """Rebuild the folder preview from scratch and jump to it in the browser."""
+
+    if config is None:
+        return None
+    try:
+        handle = restart_preview(
+            config,
+            local=bool(local or local_dir is not None),
+            local_dir=local_dir,
+        )
+    except Exception:
+        return None
+    if handle is None:
+        return None
+    _set_preview_url(handle.url)
+    _open_browser(handle.url)
+    return handle
+
+
+def _stop_dashboard_preview(handle: PreviewHandle | None) -> None:
+    _set_preview_url("")
+    if handle is None:
+        return
+    try:
+        release_preview(handle)
+    except Exception:
+        pass
+
+
 def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path | str | None = None) -> int:
     exit_armed = False
+    is_directory_mode = local or local_dir is not None
+    if is_directory_mode:
+        try:
+            _sync_local_registration(load_local_config(local_dir or "."))
+        except ConfigError:
+            pass
+    preview_config = _dashboard_config(local, local_dir)
+    if preview_config is not None and sys.stdin.isatty() and sys.stdout.isatty():
+        print(t("preview_starting"))
+        sys.stdout.flush()
+    preview_handle = _start_dashboard_preview(preview_config, local=local, local_dir=local_dir)
+    notice = ""
     enter_alt_screen()
     try:
         while True:
-            mode_prefix = t("dashboard_mode_prefix", dir_name=Path(local_dir or '.').resolve().name) if (local or local_dir is not None) else ""
-            prompt_header = f"{startup_notice}\n\n{mode_prefix}{t('dashboard_prompt')}" if startup_notice else f"{mode_prefix}{t('dashboard_prompt')}"
+            mode_prefix = t("dashboard_mode_prefix", dir_name=Path(local_dir or '.').resolve().name) if is_directory_mode else ""
+            header_lines = [line for line in (startup_notice, notice) if line]
+            header_lines.append(f"{mode_prefix}{t('dashboard_prompt')}")
+            prompt_header = "\n\n".join(header_lines)
             action = _terminal_menu(
                 prompt_header,
                 [
@@ -2274,12 +2320,13 @@ def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path
                     ("new", "new", t("menu_new")),
                     ("config", "config", t("menu_config")),
                     ("publish", "publish", t("menu_publish")),
-                    ("serve", "serve", t("menu_serve")),
+                    ("restart", "restart", t("menu_restart_preview")),
                     ("uninstall", "uninstall", t("menu_uninstall")),
                     ("quit", "quit", t("menu_quit")),
                 ],
                 footer_message=t("press_esc_to_exit") if exit_armed else "",
             )
+            notice = ""
             if action is None:
                 if exit_armed:
                     _clear_screen()
@@ -2302,12 +2349,18 @@ def run_dashboard(startup_notice: str = "", local: bool = False, local_dir: Path
             elif action == "publish":
                 cmd_publish(False, [], local=local, local_dir=local_dir)
                 _pause()
-            elif action == "serve":
-                cmd_serve(8000, local=local, local_dir=local_dir)
+            elif action == "restart":
+                restarted = _restart_dashboard_preview(preview_config, local=local, local_dir=local_dir)
+                if restarted is not None:
+                    preview_handle = restarted
+                    notice = t("preview_restart_ok")
+                else:
+                    notice = t("preview_restart_failed")
             elif action == "uninstall":
                 cmd_uninstall(True)
                 _pause()
     finally:
+        _stop_dashboard_preview(preview_handle)
         leave_alt_screen()
 
 
@@ -2355,11 +2408,15 @@ def _main(argv: list[str] | None = None) -> int:
         if upgraded:
             return 0
 
+    if not command and getattr(args, "all", False):
+        return cmd_all()
+
     if not command and sys.stdin.isatty():
         return run_dashboard(_startup_update_notice(), local=local, local_dir=dir_path)
 
     if command == "init": return cmd_init(local=local, local_dir=dir_path)
     if command == "link": return cmd_link(args.path)
+    if command == "all": return cmd_all()
     if command == "new": return cmd_new(args.title, local=local, local_dir=dir_path)
     if command in {"list", "posts"}: return cmd_list(local=local, local_dir=dir_path)
     if command == "build": return cmd_build(local=local, local_dir=dir_path)

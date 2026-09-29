@@ -201,6 +201,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "请使用方向键导航，Enter 或数字键选择对应的功能：",
         "en_US": "Use arrow keys to navigate, Enter or number keys to select:",
     },
+    "dashboard_preview_url": {
+        "zh_CN": "🌐预览：{url}",
+        "en_US": "🌐 Preview: {url}",
+    },
     "menu_list": {
         "zh_CN": "管理文章",
         "en_US": "Manage posts",
@@ -217,9 +221,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "选择草稿并发布",
         "en_US": "Select drafts to publish",
     },
-    "menu_serve": {
-        "zh_CN": "启动本地热更新预览",
-        "en_US": "Start local live preview",
+    "menu_restart_preview": {
+        "zh_CN": "重启预览并打开浏览器",
+        "en_US": "Restart preview and open browser",
     },
     "menu_uninstall": {
         "zh_CN": "卸载与清理配置，保留原稿",
@@ -469,6 +473,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "\n已停止预览。",
         "en_US": "\nPreview stopped.",
     },
+    "preview_restart_ok": {
+        "zh_CN": "🔄 预览已重启，已在浏览器中打开。",
+        "en_US": "🔄 Preview restarted and opened in the browser.",
+    },
+    "preview_restart_failed": {
+        "zh_CN": "⚠️ 预览重启失败，请稍后重试。",
+        "en_US": "⚠️ Could not restart the preview, please try again.",
+    },
+    "preview_starting": {
+        "zh_CN": "⏳ 正在启动本地预览……",
+        "en_US": "⏳ Starting local preview...",
+    },
 
     # ── Link ──
     "link_linked": {
@@ -494,6 +510,36 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "link_not_dir": {
         "zh_CN": "路径不是目录：{path}",
         "en_US": "Path is not a directory: {path}",
+    },
+
+    # ── Project Registry ──
+    "all_header": {
+        "zh_CN": "📚 Paper 项目库（{count}）",
+        "en_US": "📚 Paper Projects ({count})",
+    },
+    "all_list_header": {
+        "zh_CN": "📚 已注册的 Paper 项目（{count}）：",
+        "en_US": "📚 Registered Paper projects ({count}):",
+    },
+    "all_list_line": {
+        "zh_CN": "  · {name}  {path}  （{count} 篇文章）",
+        "en_US": "  · {name}  {path}  ({count} post(s))",
+    },
+    "all_project_meta": {
+        "zh_CN": "{path}  ·  {count} 篇文章",
+        "en_US": "{path}  ·  {count} post(s)",
+    },
+    "all_empty": {
+        "zh_CN": "还没有登记任何项目。在项目目录运行 paper -l init，即可自动登记到 Paper 项目库。",
+        "en_US": "No projects registered yet. Run `paper -l init` inside a project to register it automatically.",
+    },
+    "all_registered": {
+        "zh_CN": "✅ 已登记到 Paper 项目库：{path}",
+        "en_US": "✅ Registered in the Paper project library: {path}",
+    },
+    "all_register_failed": {
+        "zh_CN": "⚠️ 无法登记到 Paper 项目库（目录不可写或环境不支持符号链接）：{path}",
+        "en_US": "⚠️ Could not register in the Paper project library (directory not writable or symlinks unavailable): {path}",
     },
 
     # ── Init ──
@@ -1616,6 +1662,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "help_cmd_link": {
         "zh_CN": "关联外部 Markdown 文章目录",
         "en_US": "Link an external Markdown posts directory",
+    },
+    "help_cmd_all": {
+        "zh_CN": "列出并切换已登记的 Paper 项目",
+        "en_US": "List and switch between registered Paper projects",
     },
     "help_cmd_new": {
         "zh_CN": "创建新文章草稿并打开编辑器",

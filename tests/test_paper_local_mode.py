@@ -20,12 +20,18 @@ class PaperLocalModeTests(unittest.TestCase):
         self.old_home = os.environ.get("PAPER_HOME")
         self.paper_home = Path(self.temp_dir) / "global_paper_home"
         os.environ["PAPER_HOME"] = str(self.paper_home)
+        self.old_auto_update = os.environ.get("PAPER_NO_AUTO_UPDATE")
+        os.environ["PAPER_NO_AUTO_UPDATE"] = "1"
 
     def tearDown(self):
         if self.old_home is None:
             os.environ.pop("PAPER_HOME", None)
         else:
             os.environ["PAPER_HOME"] = self.old_home
+        if self.old_auto_update is None:
+            os.environ.pop("PAPER_NO_AUTO_UPDATE", None)
+        else:
+            os.environ["PAPER_NO_AUTO_UPDATE"] = self.old_auto_update
 
     def test_load_local_config_defaults(self):
         project_dir = Path(self.temp_dir) / "my_project"
@@ -144,6 +150,58 @@ class PaperLocalModeTests(unittest.TestCase):
         self.assertTrue((project_dir / "posts" / "index.md").exists())
         self.assertTrue((project_dir / "posts" / "hello-paper.md").exists())
         self.assertTrue((project_dir / "out" / "index.html").exists())
+
+    def test_cli_init_local_mode_registers_project(self):
+        project_dir = Path(self.temp_dir) / "registered_workspace"
+        project_dir.mkdir()
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = _main(["init", "-C", str(project_dir)])
+        self.assertEqual(code, 0)
+
+        links = list((self.paper_home / "projects").iterdir())
+        self.assertEqual(len(links), 1)
+        self.assertTrue(links[0].is_symlink())
+        self.assertEqual(links[0].resolve(), (project_dir / ".paper-config.json").resolve())
+
+    def test_cli_all_lists_registered_projects_and_drops_deleted_ones(self):
+        project_dir = Path(self.temp_dir) / "library_workspace"
+        project_dir.mkdir()
+        with redirect_stdout(io.StringIO()):
+            _main(["init", "-C", str(project_dir)])
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(_main(["all"]), 0)
+        output = buf.getvalue()
+        self.assertIn("library_workspace", output)
+        self.assertIn(str(project_dir), output)
+
+        shutil.rmtree(project_dir)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(_main(["-a"]), 0)
+        self.assertNotIn("library_workspace", buf.getvalue())
+
+    def test_cli_all_without_registered_projects(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(_main(["all"]), 0)
+        self.assertIn("paper -l init", buf.getvalue())
+
+    def test_cli_local_command_registers_existing_project(self):
+        project_dir = Path(self.temp_dir) / "legacy_workspace"
+        project_dir.mkdir()
+        (project_dir / ".paper-config.json").write_text("{}\n", encoding="utf-8")
+        (project_dir / "posts").mkdir()
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(_main(["list", "-C", str(project_dir)]), 0)
+
+        links = list((self.paper_home / "projects").iterdir())
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0].resolve(), (project_dir / ".paper-config.json").resolve())
 
 
 if __name__ == "__main__":

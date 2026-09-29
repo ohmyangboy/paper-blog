@@ -34,6 +34,7 @@ from paper_cli import (
     _version_key,
     _watch_preview,
     _with_spinner,
+    cmd_all,
     cmd_config,
     cmd_doctor,
     cmd_test_connection,
@@ -41,8 +42,9 @@ from paper_cli import (
     make_parser,
     run_dashboard,
 )
-from paper_runtime.core import PaperConfig, build_site
+from paper_runtime.core import PaperConfig, build_site, load_local_config, register_project, save_config
 from paper_runtime.i18n import get_current_language, set_current_language
+from paper_runtime import preview as preview_runtime
 
 
 def _init_with_origin(site_dir: Path, remote: str, gh_pages: bool = False) -> None:
@@ -92,6 +94,25 @@ class PaperCliTests(unittest.TestCase):
         ) as dashboard:
             self.assertEqual(main([]), 0)
             dashboard.assert_called_once_with("new version", local=False, local_dir=None)
+
+    def test_all_menu_opens_dashboard_for_selected_project(self):
+        root = Path(tempfile.mkdtemp(prefix="paper-all-menu-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        old_home = self._set_paper_home(root)
+        self.addCleanup(self._restore_paper_home, old_home)
+
+        project = root / "blog"
+        (project / "posts").mkdir(parents=True)
+        (project / "posts" / "hello.md").write_text("# Hi", encoding="utf-8")
+        register_project(save_config(load_local_config(project)))
+
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "sys.stdout.isatty", return_value=True
+        ), mock.patch(
+            "paper_cli._terminal_menu", side_effect=[str(project.resolve()), None]
+        ), mock.patch("paper_cli.run_dashboard", return_value=0) as dashboard:
+            self.assertEqual(cmd_all(), 0)
+        dashboard.assert_called_once_with(local=True, local_dir=project.resolve())
 
     def test_terminal_reader_keeps_arrow_escape_sequence_together(self):
         with mock.patch("sys.stdin.fileno", return_value=7), mock.patch(
@@ -147,13 +168,13 @@ class PaperCliTests(unittest.TestCase):
         self.assertIn("已退出 Paper", output.getvalue())
 
     def test_open_browser_invokes_webbrowser(self):
-        with mock.patch("paper_cli.webbrowser.open", return_value=True) as browser:
+        with mock.patch("paper_runtime.preview.webbrowser.open", return_value=True) as browser:
             self.assertTrue(_open_browser("http://127.0.0.1:8000"))
             browser.assert_called_once_with("http://127.0.0.1:8000")
 
     def test_open_browser_reports_failure_on_webbrowser_error(self):
         with mock.patch(
-            "paper_cli.webbrowser.open", side_effect=webbrowser.Error
+            "paper_runtime.preview.webbrowser.open", side_effect=webbrowser.Error
         ):
             self.assertFalse(_open_browser("http://127.0.0.1:8000"))
 
@@ -327,7 +348,7 @@ class PaperCliTests(unittest.TestCase):
                 watcher.join(timeout=1)
 
     def test_preview_watcher_batches_a_burst_of_changes(self):
-        self.assertEqual(paper_cli.PREVIEW_DEBOUNCE_SECONDS, 2.0)
+        self.assertEqual(preview_runtime.PREVIEW_DEBOUNCE_SECONDS, 2.0)
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             posts = root_path / "posts"
@@ -337,9 +358,9 @@ class PaperCliTests(unittest.TestCase):
             config = PaperConfig(posts_dir=posts, site_dir=root_path / "preview")
             state = _PreviewState()
             stop = threading.Event()
-            with mock.patch("paper_cli.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
-                "paper_cli.PREVIEW_DEBOUNCE_SECONDS", 0.4, create=True
-            ), mock.patch("paper_cli.build_site") as rebuild:
+            with mock.patch("paper_runtime.preview.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
+                "paper_runtime.preview.PREVIEW_DEBOUNCE_SECONDS", 0.4, create=True
+            ), mock.patch("paper_runtime.preview.build_site") as rebuild:
                 watcher = threading.Thread(target=_watch_preview, args=(config, state, stop), daemon=True)
                 watcher.start()
                 try:
@@ -370,9 +391,9 @@ class PaperCliTests(unittest.TestCase):
             config = PaperConfig(posts_dir=posts, site_dir=root_path / "preview")
             state = _PreviewState()
             stop = threading.Event()
-            with mock.patch("paper_cli.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
-                "paper_cli.PREVIEW_DEBOUNCE_SECONDS", 10.0, create=True
-            ), mock.patch("paper_cli.build_site") as rebuild:
+            with mock.patch("paper_runtime.preview.PREVIEW_POLL_SECONDS", 0.02, create=True), mock.patch(
+                "paper_runtime.preview.PREVIEW_DEBOUNCE_SECONDS", 10.0, create=True
+            ), mock.patch("paper_runtime.preview.build_site") as rebuild:
                 watcher = threading.Thread(target=_watch_preview, args=(config, state, stop), daemon=True)
                 watcher.start()
                 try:
@@ -388,7 +409,7 @@ class PaperCliTests(unittest.TestCase):
     def test_preview_document_request_triggers_immediate_refresh_only_for_html(self):
         handler = object.__new__(paper_cli._PreviewHandler)
         handler.preview_state = mock.Mock()
-        with mock.patch.object(paper_cli.http.server.SimpleHTTPRequestHandler, "do_GET"), mock.patch.object(
+        with mock.patch.object(preview_runtime.http.server.SimpleHTTPRequestHandler, "do_GET"), mock.patch.object(
             paper_cli._PreviewHandler, "_wait_for_output"
         ):
             handler.path = "/posts/draft/"
@@ -915,7 +936,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
                     "builtins.input", side_effect=["octocat/Hello-World", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                ), mock.patch("paper_runtime.preview.webbrowser.open", return_value=True), mock.patch(
                     "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
                 ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
@@ -943,7 +964,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
                     "builtins.input", side_effect=["octocat/Hello-World", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True) as browser, mock.patch(
+                ), mock.patch("paper_runtime.preview.webbrowser.open", return_value=True) as browser, mock.patch(
                     "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
                 ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
@@ -987,7 +1008,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                 ), mock.patch(
                     "builtins.input",
                     side_effect=["not-an-address", "", "octocat/Hello-World", ""],
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                ), mock.patch("paper_runtime.preview.webbrowser.open", return_value=True), mock.patch(
                     "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
                 ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
@@ -1009,7 +1030,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                 ), mock.patch(
                     "builtins.input", side_effect=["octocat/Hello-World", ""]
                 ), mock.patch("paper_cli._confirm_or_skip", side_effect=[True, True, False, False]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
+                    "paper_runtime.preview.webbrowser.open", return_value=True
                 ) as browser:
                     self.assertEqual(cmd_config(), 0)
                 self.assertEqual(browser.call_args_list, [mock.call("https://github.com/new")])
@@ -1040,7 +1061,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                 ), mock.patch("builtins.input", side_effect=["octocat/New-Repo", "YES", ""]), mock.patch(
                     "paper_cli._confirm_or_skip", side_effect=[True, True, True]
                 ), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
+                    "paper_runtime.preview.webbrowser.open", return_value=True
                 ) as browser, mock.patch("paper_cli.cmd_publish", return_value=0), mock.patch(
                     "paper_cli._gh_pages_pushed", return_value=True
                 ):
@@ -1080,7 +1101,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                 with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch("builtins.input", side_effect=[""]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
+                    "paper_runtime.preview.webbrowser.open", return_value=True
                 ) as browser:
                     self.assertEqual(cmd_config(), 0)
                 saved = json.loads(config_file.read_text(encoding="utf-8"))
@@ -1111,7 +1132,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                 ), mock.patch(
                     "builtins.input", side_effect=["octocat/Hello-World", "YES", ""]
                 ), mock.patch("paper_cli._confirm_or_skip", side_effect=[True, True, True]), mock.patch(
-                    "paper_cli.webbrowser.open", return_value=True
+                    "paper_runtime.preview.webbrowser.open", return_value=True
                 ), mock.patch(
                     "paper_cli.cmd_publish", return_value=0
                 ), mock.patch("paper_cli._gh_pages_pushed", return_value=True):
@@ -1168,7 +1189,7 @@ class GitHubRemoteConfigTests(PaperCliTests):
                     "paper_cli._terminal_menu", side_effect=["remote", None]
                 ), mock.patch(
                     "builtins.input", side_effect=["octocat/Hello-World", ""]
-                ), mock.patch("paper_cli.webbrowser.open", return_value=True), mock.patch(
+                ), mock.patch("paper_runtime.preview.webbrowser.open", return_value=True), mock.patch(
                     "paper_cli._confirm_or_skip", side_effect=[True, True, True, True]
                 ), mock.patch("paper_cli.cmd_publish", return_value=0), mock.patch(
                     "paper_cli._gh_pages_pushed", return_value=True
