@@ -18,6 +18,8 @@ from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
 
 from .i18n import override_language, resolve_language, set_current_language, t
+from .embeds import iframe_block
+from .social import CARD_SIZE, SOCIAL_IMAGE_SUFFIXES, generate_card, page_description, social_metadata
 from .video import VIDEO_SUFFIXES, is_video_reference, render_video, video_css, video_script
 
 try:
@@ -74,6 +76,7 @@ class PaperConfig:
     deploy: str = "auto"
     site_name: str = DEFAULT_SITE_NAME
     site_url: str = ""
+    og_image: str = ""
     color: str = DEFAULT_COLOR
     icon: str = DEFAULT_ICON
     image_radius: int = DEFAULT_IMAGE_RADIUS
@@ -94,6 +97,7 @@ class PaperConfig:
         data["gitRemote"] = data.pop("git_remote")
         data["siteName"] = data.pop("site_name")
         data["siteUrl"] = data.pop("site_url")
+        data["ogImage"] = data.pop("og_image")
         data["imageRadius"] = data.pop("image_radius")
         data["language"] = self.language
         data["schemaVersion"] = data.pop("schema_version")
@@ -111,6 +115,7 @@ class Post:
     source_path: Path
     modified_time: float
     modified_date: str
+    og_image: str = ""
 
 
 @dataclass(frozen=True)
@@ -215,6 +220,7 @@ def load_config(*, create: bool = False) -> PaperConfig:
         deploy=str(loaded.get("deploy") or "auto"),
         site_name=str(loaded.get("siteName") or loaded.get("site_name") or DEFAULT_SITE_NAME),
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
+        og_image=str(loaded.get("ogImage") or loaded.get("og_image") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
         image_radius=image_radius_value(loaded.get("imageRadius", loaded.get("image_radius"))),
@@ -325,6 +331,7 @@ def load_local_config(target_dir: Path | str = ".") -> PaperConfig:
         deploy=str(loaded.get("deploy") or "auto"),
         site_name=str(loaded.get("siteName") or loaded.get("site_name") or DEFAULT_SITE_NAME),
         site_url=str(loaded.get("siteUrl") or loaded.get("site_url") or ""),
+        og_image=str(loaded.get("ogImage") or loaded.get("og_image") or ""),
         color=str(loaded.get("color") or DEFAULT_COLOR),
         icon=loaded_icon,
         image_radius=image_radius_value(loaded.get("imageRadius", loaded.get("image_radius"))),
@@ -346,6 +353,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         "deploy": current.deploy,
         "site_name": current.site_name,
         "site_url": current.site_url,
+        "og_image": current.og_image,
         "color": current.color,
         "icon": current.icon,
         "image_radius": current.image_radius,
@@ -357,6 +365,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
     aliases = {
         "postsDir": "posts_dir", "siteDir": "site_dir", "repoDir": "site_dir",
         "gitRemote": "git_remote", "siteName": "site_name", "siteUrl": "site_url",
+        "ogImage": "og_image",
         "imageRadius": "image_radius",
         "language": "language", "lang": "language",
         "schemaVersion": "schema_version",
@@ -371,6 +380,7 @@ def save_config(config: PaperConfig | None = None, **changes: Any) -> PaperConfi
         deploy=str(values["deploy"]),
         site_name=str(values["site_name"]),
         site_url=str(values["site_url"]),
+        og_image=str(values["og_image"]),
         color=str(values["color"]),
         icon=str(values["icon"]),
         image_radius=image_radius_value(values["image_radius"]),
@@ -1035,7 +1045,7 @@ def render_markdown(
     base_path: str = "",
     posts_dir: Path | None = None,
 ) -> str:
-    """Render the Paper Markdown Profile with raw HTML disabled by default.
+    """Render the Paper Markdown Profile with only sanitized iframe HTML allowed.
 
     When posts_dir is given, local image references (absolute or relative paths)
     are copied into posts/assets so the built site can serve them.
@@ -1047,6 +1057,7 @@ def render_markdown(
         raise RuntimeError("Paper 的 Markdown 运行依赖未安装；请重新安装 Paper，不要手动运行 pip。")
     parser = MarkdownIt("js-default", {"highlight": _highlight, "breaks": True})
     parser.enable(["table", "strikethrough"])
+    parser.block.ruler.before("fence", "paper_iframe", iframe_block, {"alt": ["paragraph", "reference", "blockquote", "list"]})
     parser.inline.ruler.before("escape", "paper_math_inline", _math_inline_rule)
     parser.block.ruler.before("fence", "paper_math_block", _math_block_rule, {"alt": ["paragraph", "reference", "blockquote", "list"]})
     parser.core.ruler.after("block", "paper_blank_lines", _preserve_top_level_blank_lines)
@@ -1238,6 +1249,7 @@ def discover_posts(posts_dir: Path, *, include_drafts: bool = True) -> list[Post
             source_path=source_path,
             modified_time=modified_time,
             modified_date=modified_date,
+            og_image=str(metadata.get("og_image") or metadata.get("ogImage") or ""),
         )
         if include_drafts or post.published:
             result.append(post)
@@ -1509,6 +1521,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
 .markdown :not(pre) > code { white-space: nowrap; }
 .markdown img { display: block; max-width: 100%; height: auto; margin-inline: auto; border: 1px solid var(--border); border-radius: var(--image-radius, 8px); cursor: zoom-in; }
+.markdown .paper-iframe { display: block; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; border: 0; margin-inline: auto; }
 .markdown img[data-align="left"], .markdown img.align-left { margin-left: 0; margin-right: auto; }
 .markdown img[data-align="right"], .markdown img.align-right { margin-left: auto; margin-right: 0; }
 .markdown img[data-align="center"], .markdown img.align-center { margin-inline: auto; }
@@ -1633,7 +1646,48 @@ def _image_lightbox() -> str:
     return f"""<dialog class="image-lightbox" aria-label="{preview_label}"><button class="image-lightbox-close" type="button" aria-label="{close_label}">×</button><img alt=""></dialog><script>(()=>{{const d=document.querySelector('.image-lightbox');const v=d.querySelector('img');document.addEventListener('click',e=>{{const i=e.target.closest?.('.markdown img');if(!i||i.closest('a'))return;const s=i.currentSrc||i.src;if(typeof d.showModal!=='function'){{window.open(s,'_blank','noopener');return}}v.src=s;v.alt=i.alt||'';d.showModal()}});d.querySelector('.image-lightbox-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{{if(e.target===d)d.close()}});d.addEventListener('close',()=>{{v.removeAttribute('src')}})}})();</script>"""
 
 
-def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False) -> str:
+def social_image_href(config: PaperConfig, image: str) -> str:
+    """Resolve a configured sharing image, importing only safe local attachments."""
+    raw = image.strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return raw
+    if raw.startswith("//") and parsed.netloc:
+        return "https:" + raw
+    if parsed.scheme or Path(unquote(parsed.path)).suffix.lower() not in SOCIAL_IMAGE_SUFFIXES:
+        raise ValueError(f"OG 图片须为 HTTP(S) 地址或文章目录中的 PNG/JPEG/WebP/GIF：{image}")
+    imported = _import_obsidian_image(raw, config.posts_dir, suffixes=SOCIAL_IMAGE_SUFFIXES)
+    if imported is None:
+        raise ValueError(f"OG 图片不存在或无法安全读取：{image}")
+    return _href(config, "/assets/" + quote(imported))
+
+
+def _page_social_metadata(
+    config: PaperConfig, build_dir: Path, *, title: str, rendered: str, path: str,
+    description: str = "", image: str = "", default_image: str = "",
+    page_type: str = "website", date: str = "", draft: bool = False,
+) -> str:
+    description = page_description(rendered, description)
+    url = _absolute_href(config, path)
+    image_href = social_image_href(config, image) if image else default_image
+    image_size = None
+    if not image_href:
+        relative = generate_card(
+            build_dir, title=title, site_name=config.site_name, description=description,
+            color=config.color, url=url, date=date,
+        )
+        image_href = _href(config, "/" + relative)
+        image_size = CARD_SIZE
+    return social_metadata(
+        title=title, site_name=config.site_name, description=description, url=url,
+        image=_absolute_url(config, image_href), image_size=image_size,
+        page_type=page_type, locale=resolve_language(config_lang=config.language), draft=draft,
+    )
+
+
+def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False, metadata: str = "") -> str:
     marker = f'<p><strong>{t("draft_preview")}</strong></p>' if draft else ""
     script = _live_reload_script() if live_reload else ""
     favicon = html.escape(_favicon_href(config), quote=True)
@@ -1647,7 +1701,7 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     theme_toggle = _theme_toggle()
     theme_script = _theme_toggle_script()
     player_script = video_script() if 'class="paper-video"' in body else ""
-    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{player_script}{katex_scripts}</body></html>"""
+    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title>{metadata}<style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{player_script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -1704,6 +1758,7 @@ def _copy_referenced_assets(
     asset_base: str,
     *,
     compress: bool,
+    absolute_asset_base: str = "",
 ) -> None:
     """Copy only assets referenced by generated HTML into the build output."""
 
@@ -1713,7 +1768,8 @@ def _copy_referenced_assets(
     symlinks = [path for path in assets.rglob("*") if path.is_symlink()]
     if symlinks:
         raise ValueError(f"assets 不允许包含符号链接：{symlinks[0]}")
-    pattern = re.compile(r'(?:src|href|poster)="' + re.escape(asset_base) + r'([^"?#]+)')
+    prefixes = "|".join(re.escape(value) for value in {asset_base, absolute_asset_base} if value)
+    pattern = re.compile(r'(?:src|href|content|poster)="(?:' + prefixes + r')([^"?#]+)')
     referenced: set[Path] = set()
     for page in build_dir.rglob("*.html"):
         rendered = page.read_text(encoding="utf-8")
@@ -1744,7 +1800,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
         published = [post for post in posts if post.published]
         index_path = posts_dir / "index.md"
         index_source = index_path.read_text(encoding="utf-8") if index_path.exists() else DEFAULT_INDEX
-        _, index_body = parse_frontmatter(index_source)
+        index_metadata, index_body = parse_frontmatter(index_source)
         temp_parent = Path(tempfile.mkdtemp(prefix="paper-build-", dir=config.site_dir))
         try:
             rss_href = html.escape(_href(config, "/rss.xml"), quote=True)
@@ -1761,8 +1817,16 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             listing.append("</div></main>")
             base_path = _base_path(config)
             asset_base = _href(config, "/assets/")
-            index_html = f'<header><div class="markdown">{render_markdown(index_body, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)}</div></header>' + "\n" + "\n".join(listing)
-            _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True))
+            default_image = social_image_href(config, config.og_image)
+            rendered_index = render_markdown(index_body, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)
+            index_html = f'<header><div class="markdown">{rendered_index}</div></header>' + "\n" + "\n".join(listing)
+            home_metadata = _page_social_metadata(
+                config, temp_parent, title=config.site_name, rendered=rendered_index, path="/",
+                description=str(index_metadata.get("description") or ""),
+                image=str(index_metadata.get("og_image") or index_metadata.get("ogImage") or ""),
+                default_image=default_image,
+            )
+            _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True, metadata=home_metadata))
             _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload))
             rendered_posts: dict[str, str] = {}
             back_title = html.escape(t("back_to_home"), quote=True)
@@ -1775,10 +1839,15 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
                 back_icon = f'<a href="{back_href}" class="back-icon" title="{back_title}" aria-label="{back_title}"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>'
                 article = f'<main><article><h1>{back_icon}{html.escape(post.title)}</h1><p class="post-date">{html.escape(post.date)}</p>'
                 article += f'<div class="markdown">{rendered_content}</div></article></main>'
-                _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload))
+                post_metadata = _page_social_metadata(
+                    config, temp_parent, title=post.title, rendered=rendered_content,
+                    path=f"/posts/{post.slug}/", description=post.description, image=post.og_image,
+                    default_image=default_image, page_type="article", date=post.date, draft=not post.published,
+                )
+                _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload, metadata=post_metadata))
 
             _copy_default_icon(temp_parent, config)
-            _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress)
+            _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress, absolute_asset_base=_absolute_href(config, "/assets/"))
 
             author = _feed_author(config)
             feed_title = f"{config.site_name} @{author}" if author else config.site_name

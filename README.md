@@ -162,6 +162,8 @@ Paper 原生支持两种使用习惯，满足不同场景：
 | `paper build` | 仅生成生产环境静态文件到 `out/` 目录（供 CI 或离线检查） |
 | `paper deploy` | 手动把当前静态站点推送到 GitHub Pages（发布重试入口） |
 | `paper config` | 进入交互式站点与外观设置控制台 |
+| `paper config name "我的博客"` | 修改浏览器标题、分享卡片和 RSS 中的站点名称 |
+| `paper config og-image [图片路径或地址\|auto]` | 配置默认分享图，`auto` 恢复自动生成 |
 | `paper config lang [zh_CN\|en_US\|auto]` | 切换并持久化界面语言 |
 | `paper config remote` | 快速配置或修改 GitHub 仓库与自定义域名 |
 | `paper config editor` | 快捷配置默认编辑器（VS Code / Obsidian / Typora / 系统默认等） |
@@ -187,6 +189,39 @@ description: 这是一篇关于 Paper 的极简介绍
 
 单回车直接换行，空行用于分段。
 ```
+
+### 站点名称与 OG 分享图
+
+在 `paper config` 中选择「站点名称」或「默认分享图」，也可以直接运行：
+
+```sh
+paper config name "我的博客"
+paper config og-image assets/share.png
+# 也可使用远程图片地址；auto 恢复自动生成
+paper config og-image auto
+paper build
+```
+
+项目目录模式继续使用 `-l` 或 `-C`，例如 `paper -l config name "我的博客"`。设置保存为配置文件中的 `siteName` 和 `ogImage`，下次构建生效；线上更新使用 `paper publish`。
+
+首页和文章页都会生成 Open Graph / Twitter Card 元数据。分享图按 **页面 frontmatter 的 `og_image` → 站点 `ogImage` → 自动生成** 选择，不填写也能使用：自动图是 1200×630 的 PNG，包含标题、站点名称、摘要和地址，并沿用站点高亮色。中文字体随软件打包，生成过程在本地完成，无需额外服务。内容变化会生成新的图片地址。
+
+指定文章的分享图：
+
+```md
+---
+title: 我的文章
+published: true
+description: 分享卡片中的摘要
+og_image: assets/cover.png
+---
+```
+
+`index.md` 同样支持 `description` 和 `og_image`。图片可使用 HTTP(S) 地址，或文章目录内的 PNG/JPEG/WebP/GIF 路径；推荐 1200×630。只用于分享的本地图片也会复制到输出，草稿专属图片只进入预览。摘要优先使用 `description`，否则从正文提取。
+
+公开图片与页面地址优先取 `siteUrl`，未设置时从 GitHub 远程仓库推导（包括 Pages 项目子路径）；使用自定义域名时请先通过 `paper config pages` 设置完整地址。纯本地预览没有公开地址时使用相对地址。
+
+站点名称控制浏览器标签、OG 和 RSS 名称；首页正文中的标题可直接编辑 `index.md`。自动分享图使用 [ZCOOL XiaoWei](https://github.com/google/fonts/tree/main/ofl/zcoolxiaowei) 字体，随包附带 SIL Open Font License。
 
 ### LaTeX 数学公式渲染
 
@@ -258,6 +293,7 @@ description: 这是一篇关于 Paper 的极简介绍
 - 没有封面时显示主题占位底色；时长未加载显示 `--:--`，点击后等待数据时显示加载提示，播放失败时显示清晰提示和原视频链接。Paper 不会自动下载远程视频、抽帧或改写源视频；Vimeo 的封面由平台播放器负责。
 - 本地视频会复制到静态输出，Obsidian 附件名称必须唯一；缺失文件显示占位。无 JavaScript 时保留原生播放控件，Vimeo SDK 不可用时回退至 Vimeo 自带控件。
 - 播放器聚焦后，空格／`K` 播放暂停，`M` 切换声音，`F` 切换全屏，方向键左右跳转 5 秒。
+- 支持独立成块的 `<iframe src="https://…"></iframe>`，包括多行写法，可嵌入 Bilibili 等播放器。保留标题、宽高、全屏及有限的尺寸样式（如 `width:100%;max-width:315px;aspect-ratio:9/16;margin:auto`）；只接受 HTTP(S) 地址，过滤事件属性与 `srcdoc`，并固定沙箱权限。代码块中的 iframe 和其他原始 HTML 仍会转义。
 - Paper 能读取 Obsidian 视频嵌入语法，但 `autoplay`、`loop`、圆角与对齐等参数是 Paper 渲染扩展，不保证在 Obsidian 自身预览中生效。
 
 ---

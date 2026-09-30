@@ -81,6 +81,32 @@ class PaperCoreTests(unittest.TestCase):
         self.assertEqual(rendered.count("<br>"), 2)
         self.assertIn("第一行<br>", rendered)
 
+    def test_iframe_embed_preserves_portrait_layout_and_fullscreen(self):
+        source = '<iframe\nsrc="https://player.bilibili.com/player.html?bvid=BV11VVw6EECG&autoplay=0"\n title="Lives Mobile 宣传视频"\n style="display:block;width:100%;max-width:315px;aspect-ratio:9/16;border:0;margin:auto;"\n allow="fullscreen"\n allowfullscreen\n></iframe>'
+        rendered = render_markdown('前文\n\n' + source + '\n\n后文')
+        self.assertIn('<iframe class="paper-iframe"', rendered)
+        self.assertIn('max-width:315px;aspect-ratio:9/16', rendered)
+        self.assertIn('allow="fullscreen" allowfullscreen', rendered)
+        self.assertIn('sandbox="allow-scripts allow-same-origin allow-presentation"', rendered)
+        self.assertIn('&amp;autoplay=0', rendered)
+        self.assertNotIn('&lt;iframe', rendered)
+        self.assertIn('<p>后文</p>', rendered)
+        self.assertNotIn('<iframe class=', render_markdown('```html\n' + source + '\n```'))
+        self.assertNotIn('<iframe class=', render_markdown('    <iframe src="https://example.com"></iframe>'))
+
+    def test_iframe_embed_filters_active_attributes_and_invalid_sources(self):
+        rendered = render_markdown('<iframe src="https://example.com/embed" srcdoc="secret" onload="alert(1)" style="position:fixed;width:100%;background:url(secret)" allow="camera; fullscreen" sandbox="allow-top-navigation"></iframe>')
+        self.assertIn('<iframe class=', rendered)
+        self.assertIn('style="width:100%"', rendered)
+        self.assertIn('allow="fullscreen"', rendered)
+        for value in ('srcdoc', 'onload', 'position:', 'background:', 'camera', 'allow-top-navigation'):
+            self.assertNotIn(value, rendered)
+        for src in ('javascript:alert(1)', 'data:text/html,secret', '/local', 'file:///secret'):
+            self.assertNotIn('<iframe class=', render_markdown(f'<iframe src="{src}"></iframe>'))
+        self.assertNotIn('<iframe class=', render_markdown('<iframe src="https://example.com">unexpected</iframe>'))
+        sized = render_markdown('<iframe src="https://example.com/embed" width="640" height="360"></iframe>')
+        self.assertIn('style="width:640px;height:360px"', sized)
+
     def test_markdown_inline_math_preserves_latex_and_renders_span(self):
         rendered = render_markdown("公式 $a^2 + b^2 = c^2$ 与带下划线上标 $X_{1, 2}^2$ 测试。")
         self.assertIn('<span class="math math-inline">$a^2 + b^2 = c^2$</span>', rendered)

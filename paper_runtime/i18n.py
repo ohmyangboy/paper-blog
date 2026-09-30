@@ -1171,6 +1171,46 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 
     # ── Config Menu ──
+    "config_item_name": {
+        "zh_CN": "站点名称",
+        "en_US": "Site Name",
+    },
+    "config_current_name": {
+        "zh_CN": "站点名称 · {name}",
+        "en_US": "Site Name · {name}",
+    },
+    "site_name_prompt": {
+        "zh_CN": "站点名称（当前 {name}，留空保留）：",
+        "en_US": "Site name (current: {name}; leave blank to keep): ",
+    },
+    "site_name_invalid": {
+        "zh_CN": "站点名称须为非空的单行文字。",
+        "en_US": "Site name must be non-empty single-line text.",
+    },
+    "site_name_set": {
+        "zh_CN": "✅ 站点名称已设置：{name}",
+        "en_US": "✅ Site name set: {name}",
+    },
+    "config_item_og_image": {
+        "zh_CN": "默认分享图 (OG)",
+        "en_US": "Default Sharing Image (OG)",
+    },
+    "config_current_og_image": {
+        "zh_CN": "默认分享图 · {image}",
+        "en_US": "Default Sharing Image · {image}",
+    },
+    "og_image_auto": {
+        "zh_CN": "自动生成",
+        "en_US": "Generate automatically",
+    },
+    "og_image_prompt": {
+        "zh_CN": "分享图地址或文章目录内的图片路径（留空或 auto 恢复自动生成）：",
+        "en_US": "Sharing image URL or path within posts (blank or auto to generate automatically): ",
+    },
+    "og_image_set": {
+        "zh_CN": "✅ 默认分享图已设置：{image}",
+        "en_US": "✅ Default sharing image set: {image}",
+    },
     "config_menu_title": {
         "zh_CN": "⚙️ Paper Config",
         "en_US": "⚙️ Paper Config",

@@ -48,6 +48,7 @@ from paper_runtime.core import (
     register_project,
     registered_projects,
     save_config,
+    social_image_href,
     set_post_published,
 )
 from paper_runtime.i18n import (
@@ -550,6 +551,39 @@ def _set_image_radius(config: PaperConfig, value: str | None = None) -> PaperCon
     return saved
 
 
+def _valid_site_name(value: str) -> bool:
+    return bool(value.strip()) and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+def _set_site_name(config: PaperConfig, value: str | None = None) -> PaperConfig:
+    if value is None:
+        value = _prompt(t("site_name_prompt", name=config.site_name))
+        if not value:
+            return config
+    if not _valid_site_name(value):
+        _error(t("site_name_invalid"), 1)
+        return config
+    saved = save_config(config, site_name=value.strip())
+    print(t("site_name_set", name=saved.site_name))
+    return saved
+
+
+def _set_og_image(config: PaperConfig, value: str | None = None) -> PaperConfig:
+    if value is None:
+        value = _prompt(t("og_image_prompt"))
+        if value is None:
+            return config
+    value = "" if value.strip().lower() == "auto" else value.strip()
+    try:
+        social_image_href(config, value)
+    except ValueError as error:
+        _error(str(error), 1)
+        return config
+    saved = save_config(config, og_image=value)
+    print(t("og_image_set", image=value or t("og_image_auto")))
+    return saved
+
+
 def _set_language(config: PaperConfig, lang_code: str | None = None) -> PaperConfig:
     if lang_code is None:
         lang_code = _terminal_menu(
@@ -599,12 +633,14 @@ def cmd_config(
     lang_code: str | None = None,
     local: bool = False,
     local_dir: Path | str | None = None,
+    name_cmd: str | None = None,
+    og_image_cmd: str | None = None,
 ) -> int:
     config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code, radius_cmd)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code, radius_cmd, name_cmd, og_image_cmd)
     if not sys.stdin.isatty():
         pages = t("pages_need_remote")
         if config.git_remote:
@@ -613,6 +649,8 @@ def cmd_config(
                 pages = info.pages_url
         print(
             f"{t('status_posts_dir', path=config.posts_dir)}\n"
+            f"{t('config_item_name')}：{config.site_name}\n"
+            f"{t('config_item_og_image')}：{config.og_image or t('og_image_auto')}\n"
             f"{t('config_item_editor')}：{config.editor}\n"
             f"{t('brand_item_color')}：{config.color}\n"
             f"{t('brand_item_icon')}：{t('status_out_exists') if config.icon else t('status_not_set')}\n"
@@ -631,6 +669,8 @@ def cmd_config(
         action = _terminal_menu(
             title_prefix,
             [
+                ("name", "name", t("config_current_name", name=config.site_name)),
+                ("og-image", "og-image", t("config_current_og_image", image=config.og_image or t("og_image_auto"))),
                 ("home", "home", t("config_item_brand_desc")),
                 ("compress", "compress", f"{t('config_item_compress')} · {t('state_on') if config.compress else t('state_off')}"),
                 ("radius", "radius", t("config_current_image_radius", radius=config.image_radius)),
@@ -646,7 +686,11 @@ def cmd_config(
         )
         if action in {None, "back"}:
             return 0
-        if action == "home":
+        if action == "name":
+            config = _set_site_name(config)
+        elif action == "og-image":
+            config = _set_og_image(config)
+        elif action == "home":
             cmd_brand_config(config)
             config = _require_linked(local=local, local_dir=local_dir) or config
         elif action == "compress":
@@ -683,8 +727,23 @@ def _run_config_leaf(
     editor_name: str | None = None,
     lang_code: str | None = None,
     radius_cmd: str | None = None,
+    name_cmd: str | None = None,
+    og_image_cmd: str | None = None,
 ) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
+    if config_cmd == "name":
+        if name_cmd is not None and not _valid_site_name(name_cmd):
+            return _error(t("site_name_invalid"), 1)
+        _set_site_name(config, name_cmd)
+        return 0
+    if config_cmd == "og-image":
+        if og_image_cmd is not None and og_image_cmd.strip().lower() != "auto":
+            try:
+                social_image_href(config, og_image_cmd)
+            except ValueError as error:
+                return _error(str(error), 1)
+        _set_og_image(config, og_image_cmd)
+        return 0
     if config_cmd == "home":
         if home_cmd == "color":
             _set_highlight_color(config)
@@ -2195,6 +2254,12 @@ def make_parser() -> argparse.ArgumentParser:
     config = commands.add_parser("config", help=t("help_cmd_config"))
     _add_common_options(config)
     config_sub = config.add_subparsers(dest="config_cmd")
+    c_name = config_sub.add_parser("name", help=t("config_item_name"))
+    c_name.add_argument("name_cmd", nargs="?", help=t("config_item_name"))
+    _add_common_options(c_name)
+    c_og_image = config_sub.add_parser("og-image", help=t("config_item_og_image"))
+    c_og_image.add_argument("og_image_cmd", nargs="?", help=t("og_image_prompt"))
+    _add_common_options(c_og_image)
     home = config_sub.add_parser("home", help=t("config_item_brand"))
     _add_common_options(home)
     home_sub = home.add_subparsers(dest="home_cmd")
@@ -2433,6 +2498,8 @@ def _main(argv: list[str] | None = None) -> int:
             radius_cmd=getattr(args, "radius_cmd", None),
             editor_name=getattr(args, "editor_name", None),
             lang_code=getattr(args, "lang_code", None),
+            name_cmd=getattr(args, "name_cmd", None),
+            og_image_cmd=getattr(args, "og_image_cmd", None),
             local=local,
             local_dir=dir_path,
         )
