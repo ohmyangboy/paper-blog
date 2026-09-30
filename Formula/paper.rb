@@ -74,12 +74,29 @@ class Paper < Formula
     assert_match "paper #{version}", shell_output("#{bin}/paper --version")
     system libexec/"bin/python", "-c", <<~PYTHON
       from pathlib import Path
+      import os
       from PIL import Image
-      from paper_runtime.core import render_markdown
+      from paper_cli import main
+      from paper_runtime.core import build_site, load_local_config, render_markdown, save_config
+      os.environ["PAPER_HOME"] = str(Path.cwd()/"paper-home")
+      os.environ["PAPER_NO_AUTO_UPDATE"] = "1"
       Image.new("RGB", (16, 9), "blue").save("poster.jpg")
       markup = render_markdown("![Demo|poster=poster.jpg](https://example.test/demo.mp4)", posts_dir=Path.cwd())
       assert 'poster="/assets/poster.jpg"' in markup
       assert '--video-ratio: 16 / 9' in markup
+      posts = Path.cwd()/"posts"
+      posts.mkdir()
+      (posts/"index.md").write_text("# 分享验证\\n\\n中文分享图。", encoding="utf-8")
+      config = save_config(load_local_config(Path.cwd()), site_url="https://example.test")
+      assert main(["-C", str(Path.cwd()), "config", "name", "分享验证"]) == 0
+      config = load_local_config(Path.cwd())
+      assert config.site_name == "分享验证"
+      output = build_site(config)
+      assert 'property="og:image"' in (output/"index.html").read_text(encoding="utf-8")
+      cards = list((output/"assets/og").glob("*.png"))
+      assert len(cards) == 1
+      with Image.open(cards[0]) as image:
+          assert image.size == (1200, 630)
     PYTHON
   end
 end
