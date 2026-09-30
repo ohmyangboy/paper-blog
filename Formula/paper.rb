@@ -48,7 +48,13 @@ class Paper < Formula
   end
 
   def install
-    virtualenv_install_with_resources
+    venv = virtualenv_install_with_resources(without: OS.mac? ? "Pillow" : nil)
+    return unless OS.mac?
+
+    pillow = resource("Pillow")
+    wheel = buildpath/pillow.downloader.basename
+    cp pillow.cached_download, wheel
+    venv.pip_install wheel
   end
 
   def caveats
@@ -65,6 +71,15 @@ class Paper < Formula
   end
 
   test do
-    system bin/"paper", "--version"
+    assert_match "paper #{version}", shell_output("#{bin}/paper --version")
+    system libexec/"bin/python", "-c", <<~PYTHON
+      from pathlib import Path
+      from PIL import Image
+      from paper_runtime.core import render_markdown
+      Image.new("RGB", (16, 9), "blue").save("poster.jpg")
+      markup = render_markdown("![Demo|poster=poster.jpg](https://example.test/demo.mp4)", posts_dir=Path.cwd())
+      assert 'poster="/assets/poster.jpg"' in markup
+      assert '--video-ratio: 16 / 9' in markup
+    PYTHON
   end
 end
