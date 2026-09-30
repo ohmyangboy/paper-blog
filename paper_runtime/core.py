@@ -829,7 +829,7 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
                 align = mod_lower
             elif mod_lower in {"align-left", "align-right", "align-center"}:
                 align = mod_lower.removeprefix("align-")
-            elif mod_lower in {"autoplay", "loop"} and is_video_reference(target):
+            elif is_video_reference(target) and (mod_lower in {"autoplay", "loop", "preload=none", "preload=metadata", "preload=auto"} or mod_lower.startswith("poster=")):
                 continue
             else:
                 hints, leftover, _token_align = _parse_image_hint_tokens([mod])
@@ -1075,6 +1075,8 @@ def render_markdown(
                             child, asset_base=normalized_asset_base, posts_dir=import_dir,
                             import_local=lambda ref: _import_local_image(ref, import_dir, suffixes=VIDEO_SUFFIXES),
                             import_obsidian=lambda ref: _import_obsidian_image(ref, import_dir, suffixes=VIDEO_SUFFIXES),
+                            import_poster_local=lambda ref: _import_local_image(ref, import_dir),
+                            import_poster_obsidian=lambda ref: _import_obsidian_image(ref, import_dir),
                         )
                         child.children = None
                         continue
@@ -1357,7 +1359,7 @@ def _absolute_url(config: PaperConfig, href: str) -> str:
 def _absolute_document_urls(config: PaperConfig, rendered: str) -> str:
     """Make local links and images portable outside the website in RSS readers."""
 
-    pattern = re.compile(r'(?P<attribute>\b(?:href|src))="(?P<url>/[^"#]*)"')
+    pattern = re.compile(r'(?P<attribute>\b(?:href|src|poster))="(?P<url>/[^"#]*)"')
 
     def replace(match: re.Match[str]) -> str:
         absolute = _absolute_url(config, html.unescape(match.group("url")))
@@ -1711,7 +1713,7 @@ def _copy_referenced_assets(
     symlinks = [path for path in assets.rglob("*") if path.is_symlink()]
     if symlinks:
         raise ValueError(f"assets 不允许包含符号链接：{symlinks[0]}")
-    pattern = re.compile(r'(?:src|href)="' + re.escape(asset_base) + r'([^"?#]+)')
+    pattern = re.compile(r'(?:src|href|poster)="' + re.escape(asset_base) + r'([^"?#]+)')
     referenced: set[Path] = set()
     for page in build_dir.rglob("*.html"):
         rendered = page.read_text(encoding="utf-8")

@@ -3,11 +3,15 @@ import tempfile
 import threading
 import unittest
 from functools import partial
+from html.parser import HTMLParser
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from urllib.parse import quote
 from unittest.mock import patch
+
+from PIL import Image
 
 from paper_runtime.core import PaperConfig, build_site, render_markdown
 from paper_runtime.i18n import override_language
@@ -15,6 +19,100 @@ from paper_runtime.preview import _PreviewHandler
 
 
 class PaperVideoTests(unittest.TestCase):
+    def test_local_poster_imports_and_reserves_portrait_ratio(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "covers").mkdir()
+            cover = posts / "covers" / "Portrait Cover.JPG"
+            Image.new("RGB", (90, 160), "red").save(cover)
+            rendered = render_markdown(
+                '![Demo|poster=covers/Portrait Cover.JPG](https://cdn.example.test/demo.mp4)',
+                posts_dir=posts, asset_base="/blog/assets/",
+            )
+            self.assertIn('poster="/blog/assets/Portrait%20Cover.JPG"', rendered)
+            self.assertIn('--video-ratio: 90 / 160', rendered)
+            self.assertIn('preload="none"', rendered)
+            self.assertIn('0:00 / --:--', rendered)
+            self.assertEqual((posts / "assets" / cover.name).read_bytes(), cover.read_bytes())
+            explicit = render_markdown(
+                '![Demo|640x360|poster=covers/Portrait Cover.JPG](https://cdn.example.test/demo.mp4)',
+                posts_dir=posts,
+            )
+            self.assertIn('--video-ratio: 640 / 360', explicit)
+            self.assertNotIn('--video-ratio: 90 / 160', explicit)
+            self.assertIn('width="640" height="360"', explicit)
+            self.assertIn('preload="metadata"', render_markdown(
+                '![Demo|preload=metadata|poster=covers/Portrait Cover.JPG](https://cdn.example.test/demo.mp4)', posts_dir=posts,
+            ))
+            self.assertIn('preload="metadata"', render_markdown(
+                '![Demo|autoplay|poster=covers/Portrait Cover.JPG](https://cdn.example.test/demo.mp4)', posts_dir=posts,
+            ))
+
+    def test_remote_poster_keeps_case_signed_query_and_attribute_escaping(self):
+        source = 'https://cdn.example.test/Demo.mp4?token=Ab%2FC&expires=123'
+        poster = 'https://images.example.test/Cover.JPG?token=Cd%2FE&width=315'
+        rendered = render_markdown(f'![Demo|315x560|poster={poster}]({source})')
+        self.assertIn('src="https://cdn.example.test/Demo.mp4?token=Ab%2FC&amp;expires=123"', rendered)
+        self.assertIn('poster="https://images.example.test/Cover.JPG?token=Cd%2FE&amp;width=315"', rendered)
+        fragment = render_markdown(f'![Demo]({source}#poster={quote(poster, safe="")})')
+        self.assertIn('poster="https://images.example.test/Cover.JPG?token=Cd%2FE&amp;width=315"', fragment)
+
+        class Tags(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag == "video":
+                    self.attrs = dict(attrs)
+        tags = Tags()
+        tags.feed(render_markdown('![Demo|poster=https://images.example.test/Cover.jpg?x="onload="bad](assets/demo.mp4)'))
+        self.assertNotIn("onload", tags.attrs)
+        self.assertIn('poster="Covers/My%20Cover.JPG"', render_markdown('![Demo|poster=Covers/My Cover.JPG](assets/demo.mp4)'))
+
+    def test_obsidian_poster_does_not_replace_video_label(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "attachments").mkdir()
+            (posts / "attachments" / "demo.mp4").write_bytes(b"demo")
+            Image.new("RGB", (90, 160)).save(posts / "attachments" / "Cover.JPG")
+            rendered = render_markdown('![[demo.mp4|演示|poster=Cover.JPG]]', posts_dir=posts)
+            self.assertIn('poster="/assets/Cover.JPG"', rendered)
+            self.assertIn('aria-label="演示"', rendered)
+            self.assertNotIn('aria-label="poster=', rendered)
+
+    def test_invalid_or_missing_posters_keep_video_playable(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            outside = posts / "private.jpg"
+            Image.new("RGB", (10, 10)).save(outside)
+            linked = posts / "linked.jpg"
+            linked.symlink_to(outside)
+            for poster in ['javascript:alert(1)', 'data:image/svg+xml,bad', 'file:///private.jpg', 'https://[invalid]/Cover.jpg', 'missing.jpg', 'linked.jpg']:
+                rendered = render_markdown(f'![Demo|poster={poster}](https://cdn.example.test/demo.mp4)', posts_dir=posts)
+                self.assertIn('<video', rendered)
+                self.assertNotIn(' poster=', rendered)
+            self.assertNotIn(' poster=', render_markdown('![Demo|poster=https://example.test/cover.jpg](https://vimeo.com/123456)'))
+
+    def test_build_retains_poster_across_rebuilds_and_absolutizes_rss(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            posts = base / "posts"
+            (posts / "covers").mkdir(parents=True)
+            Image.new("RGB", (90, 160), "blue").save(posts / "covers" / "Published Cover.jpg")
+            Image.new("RGB", (90, 160), "red").save(posts / "covers" / "draft.jpg")
+            for name, cover in [('published', 'Published Cover.jpg'), ('draft', 'draft.jpg')]:
+                (posts / f'{name}.md').write_text(
+                    f'---\ntitle: {name}\npublished: {str(name == "published").lower()}\n---\n\n'
+                    f'![Demo|poster=covers/{cover}](https://cdn.example.test/demo.mp4)'
+                )
+            config = PaperConfig(posts_dir=posts, site_dir=base / "site", site_url="https://example.test/blog", compress=False)
+            for _ in range(2):
+                output = build_site(config)
+                self.assertTrue((output / 'assets' / 'Published Cover.jpg').exists())
+                self.assertFalse((output / 'assets' / 'draft.jpg').exists())
+                self.assertIn('poster="/blog/assets/Published%20Cover.jpg"', (output / 'posts' / 'published' / 'index.html').read_text())
+                from xml.etree import ElementTree
+                feed = ElementTree.parse(output / 'rss.xml')
+                description = feed.findtext('channel/item/description')
+                self.assertIn('poster="https://example.test/blog/assets/Published%20Cover.jpg"', description)
+
     def test_local_video_imports_and_keeps_source(self):
         with tempfile.TemporaryDirectory() as root:
             posts = Path(root)

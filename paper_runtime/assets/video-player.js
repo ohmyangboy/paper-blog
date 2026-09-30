@@ -3,7 +3,7 @@
   const players = new Set();
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const time = seconds => {
-    const value = Math.max(0, Math.floor(Number(seconds) || 0));
+    const value = Number.isFinite(Number(seconds)) ? Math.max(0, Math.floor(Number(seconds))) : 0;
     return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
   };
   let vimeoSDK;
@@ -34,10 +34,11 @@
       play.setAttribute('aria-label', playing ? root.dataset.labelPause : root.dataset.labelPlay);
       mute.setAttribute('aria-label', muted ? root.dataset.labelUnmute : root.dataset.labelMute);
       mute.setAttribute('aria-pressed', String(!muted));
-      clock.textContent = `${time(current)} / ${time(duration)}`;
+      const total = duration > 0 && Number.isFinite(duration) ? time(duration) : '--:--';
+      clock.textContent = `${time(current)} / ${total}`;
       seek.disabled = !(duration > 0 && Number.isFinite(duration));
       seek.value = seek.disabled ? '0' : String(current / duration * 100);
-      seek.setAttribute('aria-valuetext', `${time(current)} / ${time(duration)}`);
+      seek.setAttribute('aria-valuetext', `${time(current)} / ${total}`);
     };
     const reveal = () => {
       root.dataset.recent = '';
@@ -45,17 +46,30 @@
       interactionTimer = setTimeout(() => delete root.dataset.recent, 2200);
     };
     const error = () => {
+      delete root.dataset.loading;
       root.dataset.error = '';
       root.querySelector('.video-status').textContent = root.dataset.labelError;
     };
+    const loading = value => {
+      if (value && !('error' in root.dataset)) {
+        root.dataset.loading = '';
+        root.querySelector('.video-status').textContent = root.dataset.labelLoading;
+      } else {
+        delete root.dataset.loading;
+        if (!('error' in root.dataset)) root.querySelector('.video-status').textContent = '';
+      }
+    };
     const attemptPlay = async (automatic = false) => {
+      loading(true);
       try {
         await adapter.play();
-      } catch (_) {
+        loading(false);
+      } catch (reason) {
+        loading(false);
         // An autoplay denial is recoverable through the visible play button.
         playing = false;
         paint();
-        if (!automatic) error();
+        if (!automatic && reason?.name !== 'AbortError') error();
       }
     };
     const toggle = () => {
@@ -91,10 +105,12 @@
       paint();
       reveal();
     });
-    adapter.onPause(() => { playing = false; paint(); });
+    adapter.onPause(() => { playing = false; loading(false); paint(); });
     adapter.onTime((seconds, total) => { current = seconds; duration = total; paint(); });
     adapter.onMute(value => { muted = value; paint(); });
     adapter.onError(error);
+    adapter.onWaiting?.(() => loading(true));
+    adapter.onReady?.(() => loading(false));
     play.addEventListener('click', toggle);
     start.addEventListener('click', toggle);
     mute.addEventListener('click', toggleMute);
@@ -169,6 +185,8 @@
       },
       onMute: callback => on('volumechange', () => callback(video.muted || video.volume === 0)),
       onError: callback => { on('error', callback); if (video.error) callback(); },
+      onWaiting: callback => on('waiting', callback),
+      onReady: callback => { on('playing', callback); on('canplay', callback); },
     });
   }
 

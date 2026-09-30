@@ -48,6 +48,7 @@ def _icon(name: str) -> str:
 def render_video(
     token: Any, *, asset_base: str, posts_dir: Path | None,
     import_local: Callable[[str], str | None], import_obsidian: Callable[[str], str | None],
+    import_poster_local: Callable[[str], str | None], import_poster_obsidian: Callable[[str], str | None],
 ) -> str:
     src = token.attrGet("src") or ""
     parsed = urlparse(src)
@@ -58,18 +59,25 @@ def render_video(
         parts = label.split("|")
         label, options = parts[0] or t("video_label"), parts[1:]
     # Remote query strings may be signed; only the fragment carries Paper hints.
-    options += re.split(r"[&,;]", parsed.fragment)
+    options += [unquote(option) for option in re.split(r"[&,;]", parsed.fragment)]
     if not remote:
-        options += re.split(r"[&,;]", parsed.query)
+        options += [unquote(option) for option in re.split(r"[&,;]", parsed.query)]
     width, height, radius, align = None, None, None, "center"
+    poster_ref = ""
+    preload = None
     autoplay, loop = False, False
     for option in options:
-        option = option.strip().lower()
+        raw_option = option.strip()
+        option = raw_option.lower()
         if option in {"autoplay", "loop"}:
             autoplay = autoplay or option == "autoplay"
             loop = loop or option == "loop"
         elif option in {"left", "right", "center"}:
             align = option
+        elif option.startswith("poster="):
+            poster_ref = raw_option.split("=", 1)[1].strip()
+        elif option in {"preload=none", "preload=metadata", "preload=auto"}:
+            preload = option.split("=", 1)[1]
         elif re.fullmatch(r"[1-9][0-9]{0,3}(?:x[1-9][0-9]{0,3})?", option):
             dimensions = option.split("x")
             width = int(dimensions[0])
@@ -84,6 +92,30 @@ def render_video(
             elif key in {"r", "radius"} and number <= 512:
                 radius = number
     vimeo = _vimeo_url(src)
+    poster, poster_size = "", None
+    if poster_ref and not vimeo and not any(ord(char) < 32 or ord(char) == 127 or char == "\\" for char in poster_ref):
+        try:
+            poster_url = urlparse(poster_ref)
+        except ValueError:
+            poster_url = None
+        if poster_url and poster_url.netloc and poster_url.scheme in {"", "http", "https"}:
+            poster = poster_ref
+        elif poster_url and not poster_url.scheme and not poster_url.netloc:
+            if posts_dir is not None:
+                imported_poster = (import_poster_obsidian if token.meta.get("paper_obsidian_image") else import_poster_local)(poster_ref)
+                if imported_poster:
+                    poster = asset_base + quote(imported_poster)
+                    # A local cover reserves the correct space before video metadata arrives.
+                    from PIL import Image
+                    try:
+                        with Image.open(posts_dir / "assets" / imported_poster) as image:
+                            poster_size = image.size
+                    except (OSError, ValueError):
+                        pass
+            elif poster_ref.startswith("assets/"):
+                poster = asset_base + quote(unquote(poster_ref.removeprefix("assets/")))
+            else:
+                poster = quote(unquote(poster_url.path), safe="/")
     clean_src = urlunparse(parsed._replace(fragment="", query=parsed.query if remote else ""))
     if not remote:
         imported = None
@@ -102,17 +134,22 @@ def render_video(
         styles.append(f"--video-ratio: {width} / {height}")
     elif height:
         styles.append(f"height: {height}px")
+    elif poster_size:
+        styles.append(f"--video-ratio: {poster_size[0]} / {poster_size[1]}")
     if radius is not None:
         styles.append(f"--video-radius: {radius}px")
     attrs = f' style="{"; ".join(styles)}"' if styles else ""
     escape = lambda value: html.escape(value, quote=True)
-    labels = {name: escape(t("video_" + name)) for name in ("play", "pause", "unmute", "mute", "seek", "fullscreen", "error", "open")}
+    labels = {name: escape(t("video_" + name)) for name in ("play", "pause", "unmute", "mute", "seek", "fullscreen", "loading", "error", "open")}
     if vimeo:
         vimeo += "&loop=" + str(int(loop))
         media = f'<iframe src="{escape(vimeo)}" title="{escape(label)}" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>'
         source_link = src.split("#", 1)[0]
     else:
-        media = f'<video src="{escape(clean_src)}" controls muted playsinline preload="metadata"{" loop" if loop else ""} aria-label="{escape(label)}"><a href="{escape(clean_src)}">{labels["open"]}</a></video>'
+        poster_attr = f' poster="{escape(poster)}"' if poster else ""
+        dimensions = f' width="{width}" height="{height}"' if width and height else ""
+        preload = preload or ("none" if poster and not autoplay else "metadata")
+        media = f'<video src="{escape(clean_src)}"{poster_attr}{dimensions} controls muted playsinline preload="{preload}"{" loop" if loop else ""} aria-label="{escape(label)}"><a href="{escape(clean_src)}">{labels["open"]}</a></video>'
         source_link = clean_src
     dataset = " ".join(f'data-label-{key}="{value}"' for key, value in labels.items())
     return (
@@ -120,7 +157,7 @@ def render_video(
         f' data-align="{align}" data-autoplay="{str(autoplay).lower()}" {dataset}{attrs}>'
         f'{media}<button class="video-start" type="button" aria-label="{labels["play"]}">{_icon("play")}</button>'
         f'<span class="video-controls"><button class="video-toggle" type="button" aria-label="{labels["play"]}">{_icon("play")}{_icon("pause")}</button>'
-        f'<span class="video-time" aria-hidden="true">0:00 / 0:00</span>'
+        f'<span class="video-time" aria-hidden="true">0:00 / --:--</span>'
         f'<input class="video-seek" type="range" min="0" max="100" step="0.1" value="0" disabled aria-label="{labels["seek"]}">'
         f'<button class="video-mute" type="button" aria-label="{labels["unmute"]}" aria-pressed="false">{_icon("muted")}{_icon("sound")}</button>'
         f'<button class="video-fullscreen" type="button" aria-label="{labels["fullscreen"]}">{_icon("fullscreen")}</button></span>'

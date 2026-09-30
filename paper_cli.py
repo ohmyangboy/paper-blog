@@ -73,7 +73,7 @@ from paper_runtime.preview import (
     restart_preview,
 )
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -1934,6 +1934,7 @@ def cmd_doctor() -> int:
     try:
         import markdown_it  # noqa: F401
         import pygments  # noqa: F401
+        import PIL  # noqa: F401
         checks.append((True, t("doctor_dependencies")))
     except ImportError:
         checks.append((False, t("doctor_dependencies")))

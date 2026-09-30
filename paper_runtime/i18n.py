@@ -1641,6 +1641,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "video_seek": {"zh_CN": "播放进度", "en_US": "Playback progress"},
     "video_fullscreen": {"zh_CN": "切换全屏", "en_US": "Toggle fullscreen"},
     "video_error": {"zh_CN": "视频暂时无法播放", "en_US": "Video is unavailable"},
+    "video_loading": {"zh_CN": "视频加载中…", "en_US": "Loading video…"},
     "video_open": {"zh_CN": "打开原视频", "en_US": "Open original video"},
     "video_not_found": {"zh_CN": "视频未找到：{filename}", "en_US": "Video not found: {filename}"},
     "not_found": {
