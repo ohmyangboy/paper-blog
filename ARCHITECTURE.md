@@ -33,6 +33,8 @@ Paper 在同一渲染链中额外保留顶层块间最多两行源文件留白�
 
 图片的尺寸、圆角与对齐统一走一条提示解析：`?`/`#` 片段里的 `w=`/`h=`/`r=` 参数与 `left`/`right`/`center` 对齐词，加上 Obsidian 风格的 `|宽x高` 替代文本后缀。本地图片的查询串与片段在导入后从资源地址上移除；远程图片保留自己的查询串（`?w=` 常属于图片服务），只读取 `#` 片段。圆角默认值来自配置项 `imageRadius`，通过 CSS 变量 `--image-radius` 落到样式，单图参数以内联 `style` 覆盖。
 
+视频由同一 Markdown 渲染链识别标准图片位置的视频直链与 Obsidian 视频附件，并由 `paper_runtime/video.py` 输出安全的播放器结构。原生视频使用本地打包的 CSS/JavaScript 渐进增强，无 JavaScript 时保留原生控件；Vimeo 链接只允许明确的平台域名与数字视频 ID，按需加载官方 Player SDK，失败时保留平台控件。视频资源沿用引用收集与构建复制流程，不转码或修改源视频。
+
 ## 发布状态（v0.1.0）
 
 1. ✅ Homebrew Formula 基于真实 tag（`v0.1.0`）、源码 sha256 与锁定依赖，通过 `ohmyangboy/tap/paper` 分发。

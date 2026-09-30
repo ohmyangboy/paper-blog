@@ -21,4 +21,4 @@ py-modules = ["paper_cli"]
 packages = ["paper_runtime"]
 
 [tool.setuptools.package-data]
-paper_runtime = ["assets/*.png"]
+paper_runtime = ["assets/*.png", "assets/*.css", "assets/*.js"]

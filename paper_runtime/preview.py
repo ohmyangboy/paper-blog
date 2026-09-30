@@ -27,6 +27,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import shutil
 import signal
 import socketserver
@@ -49,6 +50,7 @@ from paper_runtime.core import (
     paper_home,
 )
 from paper_runtime.i18n import t
+from paper_runtime.video import VIDEO_SUFFIXES
 
 PREVIEW_POLL_SECONDS = 0.5
 PREVIEW_DEBOUNCE_SECONDS = 2.0
@@ -186,6 +188,59 @@ class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if attempt < PREVIEW_SWAP_RETRIES - 1:
                 time.sleep(PREVIEW_SWAP_RETRY_SECONDS)
+
+    def send_head(self):
+        """Serve video byte ranges so browser seeking works during local preview."""
+
+        self._video_bytes_remaining = None
+        path = Path(self.translate_path(self.path))
+        if path.suffix.lower() not in VIDEO_SUFFIXES or not path.is_file():
+            return super().send_head()
+        try:
+            stream = path.open("rb")
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+        size = os.fstat(stream.fileno()).st_size
+        start, end = 0, size - 1
+        byte_range = self.headers.get("Range")
+        if byte_range:
+            match = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", byte_range.strip())
+            if match and (match[1] or match[2]):
+                if match[1]:
+                    start = int(match[1])
+                    end = min(int(match[2]), size - 1) if match[2] else size - 1
+                else:
+                    start = max(0, size - int(match[2]))
+            if not match or not (match[1] or match[2]) or start > end or start >= size:
+                stream.close()
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+        self.send_response(206 if byte_range else 200)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Last-Modified", self.date_time_string(os.fstat(stream.fileno()).st_mtime))
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        stream.seek(start)
+        self._video_bytes_remaining = end - start + 1
+        return stream
+
+    def copyfile(self, source, outputfile) -> None:
+        remaining = getattr(self, "_video_bytes_remaining", None)
+        if remaining is None:
+            return super().copyfile(source, outputfile)
+        while remaining > 0:
+            block = source.read(min(64 * 1024, remaining))
+            if not block:
+                break
+            outputfile.write(block)
+            remaining -= len(block)
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")

@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
 
 from .i18n import override_language, resolve_language, set_current_language, t
+from .video import VIDEO_SUFFIXES, is_video_reference, render_video, video_css, video_script
 
 try:
     from markdown_it import MarkdownIt
@@ -710,30 +711,40 @@ def _split_alt_hints(alt: str) -> tuple[str, dict[str, str], str | None]:
     return "|".join(parts), hints, align
 
 
-def _copy_local_image(source: Path, posts_dir: Path) -> str | None:
+def _copy_local_image(source: Path, posts_dir: Path, *, suffixes: set[str] = _IMAGE_SUFFIXES) -> str | None:
     """Copy one validated image source into Paper's managed assets directory."""
 
     if source.is_symlink():
         return None
     source = source.resolve()
-    if not source.is_file() or source.suffix.lower() not in _IMAGE_SUFFIXES:
+    if not source.is_file() or source.suffix.lower() not in suffixes:
         return None
     assets_dir = posts_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     target = assets_dir / source.name
     if target.exists():
         try:
-            if target.read_bytes() == source.read_bytes():
+            if target.resolve() == source:
                 return target.name
+            if suffixes == VIDEO_SUFFIXES:
+                with source.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                with target.open("rb") as stream:
+                    if hashlib.file_digest(stream, "sha256").hexdigest() == digest:
+                        return target.name
+                digest = digest[:8]
+            else:
+                if target.read_bytes() == source.read_bytes():
+                    return target.name
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:8]
         except OSError:
             return None
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()[:8]
         target = assets_dir / f"{source.stem}-{digest}{source.suffix}"
     shutil.copy2(source, target)
     return target.name
 
 
-def _import_local_image(src: str, posts_dir: Path) -> str | None:
+def _import_local_image(src: str, posts_dir: Path, *, suffixes: set[str] = _IMAGE_SUFFIXES) -> str | None:
     """Copy a local image referenced in Markdown into posts/assets and return its new relative src.
 
     Returns None when the path is not a readable regular image file, so the original
@@ -746,10 +757,12 @@ def _import_local_image(src: str, posts_dir: Path) -> str | None:
     candidate = Path(clean)
     base = posts_dir.resolve()
     source = candidate if candidate.is_absolute() else base / candidate
-    return _copy_local_image(source, posts_dir)
+    if suffixes == VIDEO_SUFFIXES and any(path.is_symlink() for path in (source, *source.parents)):
+        return None
+    return _copy_local_image(source, posts_dir, suffixes=suffixes)
 
 
-def _import_obsidian_image(src: str, posts_dir: Path) -> str | None:
+def _import_obsidian_image(src: str, posts_dir: Path, *, suffixes: set[str] = _IMAGE_SUFFIXES) -> str | None:
     """Resolve an Obsidian attachment strictly within the linked posts directory."""
 
     clean = unquote(src.split("?", 1)[0].split("#", 1)[0])
@@ -768,7 +781,8 @@ def _import_obsidian_image(src: str, posts_dir: Path) -> str | None:
             matches = list(assets.rglob(candidate.name)) if assets.is_dir() else []
         if len(matches) > 1:
             locations = "、".join(str(path.relative_to(base)) for path in matches)
-            raise ValueError(f"Obsidian 图片名称不唯一：{candidate.name}（{locations}）")
+            kind = "视频" if suffixes == VIDEO_SUFFIXES else "图片"
+            raise ValueError(f"Obsidian {kind}名称不唯一：{candidate.name}（{locations}）")
         if not matches:
             return None
         source = matches[0]
@@ -783,7 +797,7 @@ def _import_obsidian_image(src: str, posts_dir: Path) -> str | None:
         source.resolve().relative_to(base)
     except ValueError:
         return None
-    return _copy_local_image(source, posts_dir)
+    return _copy_local_image(source, posts_dir, suffixes=suffixes)
 
 
 def _obsidian_image_rule(state: Any, silent: bool) -> bool:
@@ -800,7 +814,7 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
     if not parts:
         return False
     target = parts[0]
-    if Path(target.split("#", 1)[0]).suffix.lower() not in _IMAGE_SUFFIXES:
+    if Path(target.split("#", 1)[0]).suffix.lower() not in _IMAGE_SUFFIXES | VIDEO_SUFFIXES:
         return False
     if not silent:
         token = state.push("image", "img", 0)
@@ -815,6 +829,8 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
                 align = mod_lower
             elif mod_lower in {"align-left", "align-right", "align-center"}:
                 align = mod_lower.removeprefix("align-")
+            elif mod_lower in {"autoplay", "loop"} and is_video_reference(target):
+                continue
             else:
                 hints, leftover, _token_align = _parse_image_hint_tokens([mod])
                 if hints and not leftover:
@@ -837,6 +853,7 @@ def _obsidian_image_rule(state: Any, silent: bool) -> bool:
         token.children = [alt]
         token.content = label
         token.meta["paper_obsidian_image"] = True
+        token.meta["paper_video_modifiers"] = modifiers
     state.pos = end + 2
     return True
 
@@ -1052,6 +1069,15 @@ def render_markdown(
             for child in token.children or []:
                 if child.type == "image":
                     src = child.attrGet("src") or ""
+                    if is_video_reference(src):
+                        child.type = "paper_video"
+                        child.content = render_video(
+                            child, asset_base=normalized_asset_base, posts_dir=import_dir,
+                            import_local=lambda ref: _import_local_image(ref, import_dir, suffixes=VIDEO_SUFFIXES),
+                            import_obsidian=lambda ref: _import_obsidian_image(ref, import_dir, suffixes=VIDEO_SUFFIXES),
+                        )
+                        child.children = None
+                        continue
                     local_src = src.removeprefix("./")
                     is_obsidian = bool(child.meta.get("paper_obsidian_image"))
                     remote = src.startswith(("http://", "https://", "//"))
@@ -1163,6 +1189,7 @@ def render_markdown(
                         tokens[i + 2].tag = "div"
 
     parser.core.ruler.after("inline", "paper_links_and_images", decorate_links)
+    parser.add_render_rule("paper_video", lambda renderer, tokens, idx, options, env: tokens[idx].content)
     parser.core.ruler.after("paper_links_and_images", "paper_multi_image_groups", wrap_multi_image_groups)
     rendered = parser.render(source)
     return _task_list_transform(rendered)
@@ -1511,7 +1538,7 @@ footer { margin-top: 4rem; text-align: center; }
         .replace("__THEME_DARK_BG__", THEME_BACKGROUNDS["dark"])
         .replace("__THEME_TRANSITION__", f"{THEME_TRANSITION_MS / 1000:g}")
     )
-    return themed + "\n" + pygments_css
+    return themed + "\n" + pygments_css + "\n" + video_css()
 
 
 def _github_url(config: PaperConfig) -> str:
@@ -1617,7 +1644,8 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     theme_bootstrap = _theme_bootstrap_script()
     theme_toggle = _theme_toggle()
     theme_script = _theme_toggle_script()
-    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{katex_scripts}</body></html>"""
+    player_script = video_script() if 'class="paper-video"' in body else ""
+    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title><style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{player_script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
