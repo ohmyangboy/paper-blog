@@ -78,6 +78,7 @@ class Paper < Formula
       from PIL import Image
       from paper_cli import main
       from paper_runtime.core import build_site, load_local_config, render_markdown, save_config
+      from paper_runtime.domains import dns_records, normalize_pages_url
       os.environ["PAPER_HOME"] = str(Path.cwd()/"paper-home")
       os.environ["PAPER_NO_AUTO_UPDATE"] = "1"
       Image.new("RGB", (16, 9), "blue").save("poster.jpg")
@@ -96,6 +97,9 @@ class Paper < Formula
       config = load_local_config(Path.cwd())
       assert config.site_name == "分享验证"
       output = build_site(config)
+      assert (output/"CNAME").read_text() == "example.test\\n"
+      assert normalize_pages_url("blog.example.test") == "https://blog.example.test"
+      assert dns_records("docs.blog.example.test", "owner", "example.test") == [("docs.blog", "CNAME", "owner.github.io")]
       assert 'property="og:image"' in (output/"index.html").read_text(encoding="utf-8")
       cards = list((output/"assets/og").glob("*.png"))
       assert len(cards) == 1

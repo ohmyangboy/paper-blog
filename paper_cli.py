@@ -60,6 +60,8 @@ from paper_runtime.i18n import (
     set_current_language,
     t,
 )
+from paper_runtime.domains import GITHUB_PAGES_IPS, custom_domain, dns_records, normalize_pages_url
+from paper_runtime.pages import PagesError, PagesStatus, enforce_pages_https, get_pages_status
 from paper_runtime.preview import (
     DEFAULT_PREVIEW_PORT,
     PREVIEW_SWAP_RETRIES,
@@ -74,7 +76,7 @@ from paper_runtime.preview import (
     restart_preview,
 )
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -635,15 +637,18 @@ def cmd_config(
     local_dir: Path | str | None = None,
     name_cmd: str | None = None,
     og_image_cmd: str | None = None,
+    pages_url: str | None = None,
+    pages_check: bool = False,
+    pages_https: bool = False,
 ) -> int:
     config = _require_linked(local=local, local_dir=local_dir)
     if config is None:
         return 2
     if config_cmd is not None:
-        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code, radius_cmd, name_cmd, og_image_cmd)
+        return _run_config_leaf(config, config_cmd, home_cmd, compress_cmd, editor_name, lang_code, radius_cmd, name_cmd, og_image_cmd, pages_url, pages_check, pages_https)
     if not sys.stdin.isatty():
-        pages = t("pages_need_remote")
-        if config.git_remote:
+        pages = config.site_url or t("pages_need_remote")
+        if config.git_remote and not config.site_url:
             info = normalize_git_remote(config.git_remote)
             if info:
                 pages = info.pages_url
@@ -729,6 +734,9 @@ def _run_config_leaf(
     radius_cmd: str | None = None,
     name_cmd: str | None = None,
     og_image_cmd: str | None = None,
+    pages_url: str | None = None,
+    pages_check: bool = False,
+    pages_https: bool = False,
 ) -> int:
     """Run one config subcommand directly (paper config <cmd> [<sub>]) without the menu."""
     if config_cmd == "name":
@@ -779,7 +787,19 @@ def _run_config_leaf(
         cmd_remote_entry(config)
         return 0
     if config_cmd == "pages":
-        cmd_pages_url(config)
+        if pages_check or pages_https:
+            if pages_url is not None:
+                return _error(t("pages_options_conflict"), 1)
+            return cmd_pages_check(config, enforce_https=pages_https)
+        if pages_url is not None:
+            try:
+                pages_url = normalize_pages_url(pages_url)
+            except ValueError:
+                return _error(t("pages_invalid_url"), 1)
+        try:
+            cmd_pages_url(config, pages_url)
+        except ValueError:
+            return _error(t("pages_invalid_url"), 1)
         _pause()
         return 0
     if config_cmd == "test":
@@ -868,12 +888,12 @@ def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1 for ch in text)
 
 
-def _wizard_header(current: int) -> None:
+def _wizard_header(current: int, steps: list[str] | None = None) -> None:
     """Top numbered stepper, Claude-settings style: the four steps as 1 2 3 4
     with the active number highlighted. Only the active marker moves between
     steps — the screen is redrawn in place, never appended downward."""
     parts = []
-    steps = _wizard_steps()
+    steps = steps or _wizard_steps()
     for index, name in enumerate(steps, start=1):
         if index < current:
             parts.append(f"{GREEN}✓ {index} {name}{RESET}")
@@ -903,13 +923,13 @@ def _wizard_panel(title: str, body: list[tuple[str, str]]) -> None:
     print(f"  {GRAY}└{bar}┘{RESET}")
 
 
-def _wizard_screen(current: int, title: str, body: list[tuple[str, str]]) -> None:
+def _wizard_screen(current: int, title: str, body: list[tuple[str, str]], *, steps: list[str] | None = None) -> None:
     """Clear and redraw the wizard for one step: numbered header on top, content
     panel below. Redrawing (not appending) makes advancing switch the header's
     active marker and swap the panel in place — the settings-style transition
     the wizard needs."""
     _clear_screen()
-    _wizard_header(current)
+    _wizard_header(current, steps)
     print()
     _wizard_panel(title, body)
 
@@ -1050,17 +1070,166 @@ def cmd_remote_wizard(config: PaperConfig) -> PaperConfig:
     return config
 
 
-def cmd_pages_url(config: PaperConfig) -> PaperConfig:
+def _pages_screen(step: int, body: list[tuple[str, str]]) -> None:
+    steps = [t(f"pages_step{number}_name") for number in range(1, 5)]
+    _wizard_screen(step, steps[step - 1], body, steps=steps)
+
+
+def _dns_rows(records: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
+    return [("hint", t("pages_dns_columns"))] + [
+        ("content", f"{host:<12} {kind:<6} {target}") for host, kind, target in records
+    ]
+
+
+def _pages_dns_hint(owner: str) -> None:
+    print(t("pages_dns_apex_hint"))
+    for address in GITHUB_PAGES_IPS:
+        print(f"  @  A  {address}")
+    print(t("pages_dns_subdomain_hint", target=f"{owner}.github.io"))
+    print(t("pages_check_later"))
+
+
+def cmd_pages_url(config: PaperConfig, value: str | None = None) -> PaperConfig:
+    """Four-step setup; explicit/piped URLs save locally without remote writes."""
     info = normalize_git_remote(config.git_remote) if config.git_remote else None
-    derived = info.pages_url if info else t("pages_need_remote")
-    print(t("pages_derived_url", url=derived))
-    print(t("pages_current_site_url", url=config.site_url or t("pages_site_url_unset")))
+    interactive = value is None and sys.stdin.isatty() and sys.stdout.isatty()
+    initial = [
+        ("content", t("pages_derived_url", url=info.pages_url if info else t("pages_need_remote"))),
+        ("content", t("pages_current_site_url", url=config.site_url or t("pages_site_url_unset"))),
+        ("hint", t("pages_address_hint")),
+    ]
+    if interactive:
+        _pages_screen(1, initial)
+    elif value is None:
+        for _, line in initial:
+            print(line)
+    while True:
+        raw = value if value is not None else _prompt(t("pages_custom_prompt"))
+        if raw is None:
+            print(t("pages_cancelled"))
+            return config
+        try:
+            site_url = normalize_pages_url(raw)
+            break
+        except ValueError:
+            if not interactive:
+                raise
+            _error(t("pages_invalid_url"), 1)
+    domain = custom_domain(site_url)
+    effective_url = site_url or (info.pages_url if info else t("pages_site_url_unset"))
+    if interactive:
+        _pages_screen(2, [
+            ("content", t("pages_target_url", url=effective_url)),
+            ("content", t("pages_target_repo", repo=f"{info.owner}/{info.repo}" if info else t("pages_need_remote"))),
+            ("hint", t("pages_binding_kept")),
+        ])
+        if not _confirm_or_skip(t("pages_save_prompt")):
+            print(t("pages_cancelled"))
+            return config
+    saved = save_config(config, site_url=site_url)
+    print(t("pages_saved", url=effective_url))
+    if info is None:
+        print(t("pages_remote_first"))
+        return saved
+    if not interactive:
+        if domain:
+            _pages_dns_hint(info.owner)
+        return saved
+
+    if _has_github_pages_actions(saved.site_dir):
+        print(t("pages_actions_hint"))
+    elif _confirm_or_skip(t("pages_deploy_prompt")):
+        local_dir = saved.config_path.parent if saved.config_path and saved.config_path.resolve() != config_path().resolve() else None
+        try:
+            _with_spinner(t("publish_rebuilding"), build_site, saved)
+            deployed = cmd_deploy(local_dir=local_dir) == 0
+        except Exception as error:
+            _error(str(error), 1)
+            deployed = False
+        if not deployed:
+            print(t("pages_deploy_failed"))
+    print(t("pages_settings_link", url=info.pages_settings_url))
+    print(t("pages_settings_domain", domain=domain) if domain else t("pages_settings_default"))
+    if _confirm_or_skip(t("pages_open_settings_prompt")):
+        _open_browser(info.pages_settings_url)
+    if not _confirm_or_skip(t("pages_bound_continue_prompt")):
+        print(t("pages_check_later"))
+        return saved
+
+    if domain:
+        _pages_screen(3, [
+            ("content", t("pages_target_url", url=effective_url)),
+            ("hint", t("pages_dns_zone_hint")),
+            ("hint", t("pages_dns_zone_example")),
+        ])
+        while True:
+            zone = _prompt(t("pages_dns_zone_prompt", domain=domain))
+            if zone is None:
+                print(t("pages_check_later"))
+                return saved
+            try:
+                records = dns_records(domain, info.owner, zone or domain)
+                break
+            except ValueError:
+                _error(t("pages_dns_zone_invalid"), 1)
+        _pages_screen(3, [
+            ("hint", t("pages_dns_add_hint")),
+            *_dns_rows(records),
+            ("hint", t("pages_dns_ttl_hint")),
+            ("hint", t("pages_dns_existing_hint")),
+        ])
+        if not _confirm_or_skip(t("pages_dns_continue_prompt")):
+            print(t("pages_check_later"))
+            return saved
+    else:
+        _pages_screen(3, [("hint", t("pages_default_dns"))])
+
+    _pages_screen(4, [("content", t("pages_target_url", url=effective_url)), ("hint", t("pages_https_wait_hint"))])
+    cmd_pages_check(saved, offer_https=True)
+    return saved
+
+
+def _pages_status_rows(status: PagesStatus, info: GitRemoteInfo) -> list[tuple[str, str]]:
+    dns = t("pages_dns_valid") if status.dns_valid is True else t("pages_dns_invalid") if status.dns_valid is False else t("pages_dns_unknown")
+    if status.certificate_state == "approved":
+        certificate = t("pages_certificate_ready")
+    elif status.certificate_state in {"errored", "bad_authz", "authorization_revoked", "destroyed", "expired"}:
+        certificate = t("pages_certificate_failed")
+    else:
+        certificate = t("pages_certificate_pending") if status.certificate_state else t("pages_certificate_unknown")
+    return [
+        ("content", t("pages_build_status", state=t("pages_build_ready") if status.build_status == "built" else t("pages_build_pending"))),
+        ("content", t("pages_domain_status", domain=status.cname or info.pages_url)),
+        ("content", t("pages_dns_status", state=dns)),
+        ("content", t("pages_certificate_status", state=certificate)),
+        ("content", t("pages_https_status", state=t("state_on") if status.https_enforced else t("state_off"))),
+    ]
+
+
+def cmd_pages_check(config: PaperConfig, *, enforce_https: bool = False, offer_https: bool = False) -> int:
+    info = normalize_git_remote(config.git_remote) if config.git_remote else None
+    if info is None:
+        return _error(t("pages_remote_first"), 1)
+    domain = custom_domain(config.site_url)
     try:
-        raw = input(t("pages_custom_prompt")).strip()
-    except (EOFError, KeyboardInterrupt):
-        print(t("pages_cancelled"))
-        return config
-    return save_config(config, site_url=raw)
+        status = _with_spinner(t("pages_checking"), get_pages_status, info)
+        _wizard_panel(t("pages_status_title"), _pages_status_rows(status, info))
+        if not status.matches_domain(domain):
+            raise PagesError("binding_mismatch")
+        requested = enforce_https or (offer_https and not status.https_enforced and status.can_enforce_https(domain) and _confirm_or_skip(t("pages_https_enable_prompt")))
+        if requested:
+            _with_spinner(t("pages_https_enabling"), enforce_pages_https, info, domain)
+            print(t("pages_https_enabled"))
+        elif not status.https_enforced:
+            print(t("pages_https_ready_hint") if status.can_enforce_https(domain) else t("pages_https_wait_hint"))
+            print(t("pages_https_command_hint"))
+        print(t("pages_check_later"))
+        return 0
+    except PagesError as error:
+        _error(t(f"pages_error_{error.kind}", detail=error.detail, expected=domain or info.pages_url), 1)
+        print(t("pages_settings_link", url=info.pages_settings_url))
+        print(t("pages_check_later"))
+        return 1
 
 
 def cmd_test_connection(config: PaperConfig) -> int:
@@ -1951,7 +2120,7 @@ def cmd_status(local: bool = False, local_dir: Path | str | None = None) -> int:
     if config.git_remote:
         info = normalize_git_remote(config.git_remote)
         if info:
-            print(t("status_pages_url", url=info.pages_url))
+            print(t("status_pages_url", url=config.site_url or info.pages_url))
     print(t("status_static_out", status=t("status_out_exists") if config.output_dir.exists() else t("status_out_not_built")))
     state, label = _deployment_readiness(config)
     print(t("status_readiness", status=label))
@@ -2285,6 +2454,9 @@ def make_parser() -> argparse.ArgumentParser:
     _add_common_options(c_remote)
     c_pages = config_sub.add_parser("pages", help=t("config_item_pages"))
     _add_common_options(c_pages)
+    c_pages.add_argument("pages_url", nargs="?", help=t("pages_url_argument_help"))
+    c_pages.add_argument("--check", dest="pages_check", action="store_true", help=t("pages_check_argument_help"))
+    c_pages.add_argument("--https", dest="pages_https", action="store_true", help=t("pages_https_argument_help"))
     c_test = config_sub.add_parser("test", help=t("config_item_test"))
     _add_common_options(c_test)
     c_status = config_sub.add_parser("status", help=t("config_item_status"))
@@ -2500,6 +2672,9 @@ def _main(argv: list[str] | None = None) -> int:
             lang_code=getattr(args, "lang_code", None),
             name_cmd=getattr(args, "name_cmd", None),
             og_image_cmd=getattr(args, "og_image_cmd", None),
+            pages_url=getattr(args, "pages_url", None),
+            pages_check=getattr(args, "pages_check", False),
+            pages_https=getattr(args, "pages_https", False),
             local=local,
             local_dir=dir_path,
         )

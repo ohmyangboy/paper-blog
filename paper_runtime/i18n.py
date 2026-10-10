@@ -1305,6 +1305,262 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 
     # ── Pages URL ──
+    "pages_step1_name": {
+        "zh_CN": "网站地址",
+        "en_US": "Site URL",
+    },
+    "pages_step2_name": {
+        "zh_CN": "绑定与部署",
+        "en_US": "Bind & deploy",
+    },
+    "pages_step3_name": {
+        "zh_CN": "DNS 记录",
+        "en_US": "DNS records",
+    },
+    "pages_step4_name": {
+        "zh_CN": "HTTPS 检查",
+        "en_US": "HTTPS check",
+    },
+    "pages_address_hint": {
+        "zh_CN": "输入完整网址或域名（如 1leaf.cc）；留空恢复默认 Pages 地址。",
+        "en_US": "Enter a URL or domain (e.g. example.com); leave blank to restore the default Pages URL.",
+    },
+    "pages_invalid_url": {
+        "zh_CN": "请输入有效的公开网址或域名；自定义域名不包含路径、端口或账号信息。",
+        "en_US": "Enter a valid public URL or domain; custom domains cannot include a path, port, or credentials.",
+    },
+    "pages_options_conflict": {
+        "zh_CN": "设置网址与 --check / --https 请分开执行。",
+        "en_US": "Set the URL separately from --check / --https.",
+    },
+    "pages_target_url": {
+        "zh_CN": "网站地址：{url}",
+        "en_US": "Site URL: {url}",
+    },
+    "pages_target_repo": {
+        "zh_CN": "目标仓库：{repo}",
+        "en_US": "Repository: {repo}",
+    },
+    "pages_binding_kept": {
+        "zh_CN": "页面和 RSS 地址将同步更新，后续部署会保留域名绑定。",
+        "en_US": "Page and RSS URLs will update together; future deployments will retain the domain binding.",
+    },
+    "pages_save_prompt": {
+        "zh_CN": "按 Enter 保存，其他键取消：",
+        "en_US": "Press Enter to save, any other key to cancel: ",
+    },
+    "pages_saved": {
+        "zh_CN": "✅ 网站地址已保存：{url}",
+        "en_US": "✅ Site URL saved: {url}",
+    },
+    "pages_remote_first": {
+        "zh_CN": "请先运行 paper config remote 连接 GitHub 仓库，再运行本向导继续绑定。",
+        "en_US": "Run paper config remote to connect a GitHub repository, then return to this wizard.",
+    },
+    "pages_deploy_prompt": {
+        "zh_CN": "按 Enter 部署已发布的文章并更新域名，其他键稍后部署：",
+        "en_US": "Press Enter to deploy published posts with the new URL, any other key to deploy later: ",
+    },
+    "pages_deploy_failed": {
+        "zh_CN": "部署尚未成功，请修复后运行 paper deploy；下面可继续查看设置指引。",
+        "en_US": "Deployment did not succeed. Fix the issue and run paper deploy; setup guidance is shown below.",
+    },
+    "pages_actions_hint": {
+        "zh_CN": "该项目使用 GitHub Actions，请通过现有工作流部署，并在 Pages 设置中保存自定义域名。",
+        "en_US": "This project uses GitHub Actions. Deploy through its workflow and save the domain in Pages settings.",
+    },
+    "pages_settings_link": {
+        "zh_CN": "GitHub Pages 设置：{url}",
+        "en_US": "GitHub Pages settings: {url}",
+    },
+    "pages_settings_domain": {
+        "zh_CN": "确认 Pages 已启用，并在 Custom domain 中保存：{domain}",
+        "en_US": "Make sure Pages is enabled, then save this Custom domain: {domain}",
+    },
+    "pages_settings_default": {
+        "zh_CN": "确认 Pages 已启用；恢复默认网址时，在 Custom domain 旁点击 Remove。",
+        "en_US": "Make sure Pages is enabled; to restore the default URL, click Remove beside Custom domain.",
+    },
+    "pages_open_settings_prompt": {
+        "zh_CN": "按 Enter 打开 Pages 设置，其他键跳过：",
+        "en_US": "Press Enter to open Pages settings, any other key to skip: ",
+    },
+    "pages_bound_continue_prompt": {
+        "zh_CN": "Pages 中已保存上述设置：按 Enter 继续 DNS，其他键稍后继续：",
+        "en_US": "Once these settings are saved in Pages, press Enter for DNS, any other key to continue later: ",
+    },
+    "pages_dns_zone_hint": {
+        "zh_CN": "填写你在阿里云等域名服务商管理的域名。",
+        "en_US": "Enter the domain you manage at your DNS provider.",
+    },
+    "pages_dns_zone_example": {
+        "zh_CN": "例如 blog.example.com 应填 example.com；根域名可直接回车。",
+        "en_US": "For blog.example.com enter example.com; for the root domain just press Enter.",
+    },
+    "pages_dns_zone_prompt": {
+        "zh_CN": "管理的域名 [{domain}]：",
+        "en_US": "Managed domain [{domain}]: ",
+    },
+    "pages_dns_zone_invalid": {
+        "zh_CN": "该域名不包含你配置的网站地址，请填写其所属的域名。",
+        "en_US": "That domain does not contain your site address. Enter the domain it belongs to.",
+    },
+    "pages_dns_columns": {
+        "zh_CN": "主机记录     类型   记录值",
+        "en_US": "Host         Type   Value",
+    },
+    "pages_dns_add_hint": {
+        "zh_CN": "在域名服务商的 DNS 解析设置中添加以下记录：",
+        "en_US": "Add these records in your DNS provider's settings:",
+    },
+    "pages_dns_ttl_hint": {
+        "zh_CN": "线路选默认，TTL 可设为 10 分钟。",
+        "en_US": "Use the default routing policy; a 10-minute TTL is suitable.",
+    },
+    "pages_dns_existing_hint": {
+        "zh_CN": "同一主机记录已有旧地址时更新它，其他子域名记录保持原样。",
+        "en_US": "Update old addresses for the same host; keep other subdomain records unchanged.",
+    },
+    "pages_dns_continue_prompt": {
+        "zh_CN": "DNS 记录已保存：按 Enter 检查状态，其他键稍后检查：",
+        "en_US": "Once DNS records are saved, press Enter to check, any other key to check later: ",
+    },
+    "pages_dns_apex_hint": {
+        "zh_CN": "根域名：添加以下四条 A 记录；建议另加 www 的 CNAME。",
+        "en_US": "Root domain: add these four A records; a www CNAME is also recommended.",
+    },
+    "pages_dns_subdomain_hint": {
+        "zh_CN": "子域名（含 www）：将子域名部分的 CNAME 指向 {target}。",
+        "en_US": "Subdomains (including www): point their CNAME to {target}.",
+    },
+    "pages_default_dns": {
+        "zh_CN": "默认 github.io 地址由 GitHub 管理，无需设置 DNS 记录。",
+        "en_US": "GitHub manages the default github.io URL; no DNS records are needed.",
+    },
+    "pages_check_later": {
+        "zh_CN": "稍后可运行 paper config pages --check 重新检查。",
+        "en_US": "Run paper config pages --check later to check again.",
+    },
+    "pages_https_wait_hint": {
+        "zh_CN": "DNS 更新和 HTTPS 证书签发可能需要 24 小时，可稍后重新检查。",
+        "en_US": "DNS updates and HTTPS certificate issuance can take 24 hours; check again later.",
+    },
+    "pages_https_ready_hint": {
+        "zh_CN": "HTTPS 已就绪，可以开启强制 HTTPS。",
+        "en_US": "HTTPS is ready; you can now enforce HTTPS.",
+    },
+    "pages_https_command_hint": {
+        "zh_CN": "就绪后运行 paper config pages --https，或在 Pages 设置中勾选 Enforce HTTPS。",
+        "en_US": "When ready, run paper config pages --https or select Enforce HTTPS in Pages settings.",
+    },
+    "pages_checking": {
+        "zh_CN": "正在检查 GitHub Pages、DNS 和 HTTPS…",
+        "en_US": "Checking GitHub Pages, DNS and HTTPS…",
+    },
+    "pages_status_title": {
+        "zh_CN": "网站状态",
+        "en_US": "Site status",
+    },
+    "pages_build_status": {
+        "zh_CN": "Pages 部署：{state}",
+        "en_US": "Pages deployment: {state}",
+    },
+    "pages_build_ready": {
+        "zh_CN": "已上线",
+        "en_US": "Built",
+    },
+    "pages_build_pending": {
+        "zh_CN": "等待部署完成",
+        "en_US": "Waiting for deployment",
+    },
+    "pages_domain_status": {
+        "zh_CN": "已绑定地址：{domain}",
+        "en_US": "Bound address: {domain}",
+    },
+    "pages_dns_status": {
+        "zh_CN": "DNS 检查：{state}",
+        "en_US": "DNS check: {state}",
+    },
+    "pages_dns_valid": {
+        "zh_CN": "通过",
+        "en_US": "Passed",
+    },
+    "pages_dns_invalid": {
+        "zh_CN": "未通过，请核对解析记录",
+        "en_US": "Failed; check your DNS records",
+    },
+    "pages_dns_unknown": {
+        "zh_CN": "检查中或暂不可用",
+        "en_US": "In progress or unavailable",
+    },
+    "pages_certificate_status": {
+        "zh_CN": "HTTPS 证书：{state}",
+        "en_US": "HTTPS certificate: {state}",
+    },
+    "pages_certificate_ready": {
+        "zh_CN": "已就绪",
+        "en_US": "Ready",
+    },
+    "pages_certificate_pending": {
+        "zh_CN": "签发中",
+        "en_US": "Being issued",
+    },
+    "pages_certificate_unknown": {
+        "zh_CN": "暂无证书信息",
+        "en_US": "No certificate information yet",
+    },
+    "pages_certificate_failed": {
+        "zh_CN": "签发异常，请到 Pages 设置查看",
+        "en_US": "Issuance failed; review Pages settings",
+    },
+    "pages_https_status": {
+        "zh_CN": "强制 HTTPS：{state}",
+        "en_US": "Enforce HTTPS: {state}",
+    },
+    "pages_https_enable_prompt": {
+        "zh_CN": "证书已就绪：按 Enter 开启强制 HTTPS，其他键稍后开启：",
+        "en_US": "The certificate is ready: press Enter to enforce HTTPS, any other key to enable it later: ",
+    },
+    "pages_https_enabling": {
+        "zh_CN": "正在开启并确认强制 HTTPS…",
+        "en_US": "Enabling and verifying HTTPS enforcement…",
+    },
+    "pages_https_enabled": {
+        "zh_CN": "✅ GitHub 已确认开启强制 HTTPS。",
+        "en_US": "✅ GitHub confirmed HTTPS enforcement is enabled.",
+    },
+    "pages_error_gh_missing": {
+        "zh_CN": "自动检查需要 GitHub CLI：运行 brew install gh 和 gh auth login；也可在浏览器查看 Pages 设置。",
+        "en_US": "Automatic checks need GitHub CLI: run brew install gh and gh auth login, or use Pages settings in your browser.",
+    },
+    "pages_error_api_error": {
+        "zh_CN": "暂时无法读取 GitHub Pages，请检查 gh auth login、仓库权限及 Pages 是否已启用。{detail}",
+        "en_US": "Cannot access GitHub Pages. Check gh auth login, repository permissions, and whether Pages is enabled. {detail}",
+    },
+    "pages_error_binding_mismatch": {
+        "zh_CN": "Pages 当前绑定与配置不同，请在设置中确认网站地址：{expected}",
+        "en_US": "The Pages binding differs from your configuration. Verify this address in settings: {expected}",
+    },
+    "pages_error_https_pending": {
+        "zh_CN": "DNS 或证书尚未就绪，暂时无法开启强制 HTTPS，请稍后重试。",
+        "en_US": "DNS or the certificate is not ready. Retry HTTPS enforcement later.",
+    },
+    "pages_error_https_unconfirmed": {
+        "zh_CN": "GitHub 尚未确认开启强制 HTTPS，请稍后重新检查。",
+        "en_US": "GitHub has not confirmed HTTPS enforcement. Check again later.",
+    },
+    "pages_url_argument_help": {
+        "zh_CN": "直接保存网址或域名；省略时打开配置向导",
+        "en_US": "Save a URL or domain directly; omit to open the setup wizard",
+    },
+    "pages_check_argument_help": {
+        "zh_CN": "查看 Pages、DNS、HTTPS 状态，不修改远程设置",
+        "en_US": "Read Pages, DNS and HTTPS status without changing remote settings",
+    },
+    "pages_https_argument_help": {
+        "zh_CN": "检查就绪后开启强制 HTTPS",
+        "en_US": "Enforce HTTPS after checking readiness",
+    },
     "pages_derived_url": {
         "zh_CN": "推导的 Pages 地址：{url}",
         "en_US": "Derived Pages URL: {url}",

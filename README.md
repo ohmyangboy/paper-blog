@@ -165,13 +165,37 @@ Paper 原生支持两种使用习惯，满足不同场景：
 | `paper config name "我的博客"` | 修改浏览器标题、分享卡片和 RSS 中的站点名称 |
 | `paper config og-image [图片路径或地址\|auto]` | 配置默认分享图，`auto` 恢复自动生成 |
 | `paper config lang [zh_CN\|en_US\|auto]` | 切换并持久化界面语言 |
-| `paper config remote` | 快速配置或修改 GitHub 仓库与自定义域名 |
+| `paper config remote` | 引导配置或修改 GitHub 仓库 |
+| `paper config pages [网址或域名]` | 引导设置网站地址、绑定 Pages、配置 DNS；带地址时仅保存配置 |
+| `paper config pages --check` | 查看 Pages、DNS 和 HTTPS 状态 |
+| `paper config pages --https` | 证书就绪后开启并确认强制 HTTPS |
 | `paper config editor` | 快捷配置默认编辑器（VS Code / Obsidian / Typora / 系统默认等） |
 | `paper doctor` | 检查当前 Python 运行时、Git 及网络配置状态 |
 | `paper update` | 一键检查并自更新 Paper 到最新版本 |
 | `paper uninstall` | 显示卸载指南（加 `--clean` 可彻底清理配置缓存，不删原稿） |
 
 ---
+
+## 🌐 自定义域名配置
+
+运行 `paper config pages`，或从 `paper config` 选择 Pages，进入与远程仓库配置相同的四步向导：
+
+1. **网站地址**：输入 `example.com` 或完整网址，裸域名自动补成 HTTPS；留空恢复默认 `github.io` 地址。保存前会展示目标地址和仓库。
+2. **绑定与部署**：保存后可部署已发布文章，页面、RSS 和站点地图同步使用新地址。打开 GitHub Pages 设置，确认 Pages 已启用，并保存 Custom domain；恢复默认网址时移除 Custom domain。使用 GitHub Actions 的项目通过其现有工作流部署。
+3. **DNS 记录**：填写你在阿里云等服务商管理的域名。根域名显示四条 `@` A 记录和建议的 `www` CNAME；子域名显示对应的 CNAME，支持多级子域名与 `example.co.uk` 等域名。向导提供填写指引，由你在 DNS 控制台保存记录。
+4. **HTTPS 检查**：通过已登录的 GitHub CLI 检查绑定、DNS、证书和强制 HTTPS 状态。证书就绪后可开启强制 HTTPS；签发期间可以退出，稍后再检查。
+
+```bash
+paper config pages                          # 打开完整向导
+paper config pages example.com              # 仅保存地址，不部署或修改远程设置
+paper config pages --check                  # 重新检查，不修改远程设置
+paper config pages --https                  # 就绪后开启强制 HTTPS，并读取结果确认
+paper -C /path/to/blog config pages         # 为指定的局部项目配置
+```
+
+自动检查需要安装并登录 GitHub CLI：`brew install gh`、`gh auth login`。没有 GitHub CLI 时，仍可保存网站地址、查看 DNS 指引并在浏览器完成 Pages 设置。
+
+自定义域名会在每次构建时自动生成 `CNAME`，避免后续部署丢失绑定；恢复默认 Pages 地址时不再生成该文件。DNS 生效和 HTTPS 证书签发可能需要 24 小时。DNS 记录与 HTTPS 的规则遵循 [GitHub Pages 官方说明](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site)。
 
 ## ✍️ 写作与 Markdown 规范
 

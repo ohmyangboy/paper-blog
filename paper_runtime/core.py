@@ -19,6 +19,7 @@ from urllib.parse import quote, unquote, urlparse
 
 from .i18n import override_language, resolve_language, set_current_language, t
 from .embeds import iframe_block
+from .domains import custom_domain
 from .social import CARD_SIZE, SOCIAL_IMAGE_SUFFIXES, generate_card, page_description, social_metadata
 from .video import VIDEO_SUFFIXES, is_video_reference, render_video, video_css, video_script
 
@@ -1923,6 +1924,9 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             _write(temp_parent / "rss.xml", rss)
             sitemap = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" + "".join(f"<url><loc>{html.escape(url)}</loc></url>" for url in sitemap_urls) + "</urlset>"
             _write(temp_parent / "sitemap.xml", sitemap)
+            domain = custom_domain(config.site_url)
+            if domain:
+                _write(temp_parent / "CNAME", f"{domain}\n")
             output = config.output_dir
             backup = config.site_dir / ".paper-out-backup"
             if backup.exists():
