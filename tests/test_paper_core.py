@@ -895,6 +895,71 @@ $$
         self.assertIn('<a href="https://example.com/1"', rendered)
         self.assertIn('<a href="https://example.com/2"', rendered)
 
+    def test_markdown_inline_image_preserves_surrounding_text_and_size(self):
+        rendered = render_markdown("你好 ![挥手](assets/wave.png?w=24&h=24&r=4)，我是 Yang。")
+        self.assertIn('<p>你好 <img', rendered)
+        self.assertIn('src="/assets/wave.png"', rendered)
+        self.assertIn('width="24" height="24"', rendered)
+        self.assertIn('border-radius: 4px', rendered)
+        self.assertIn('class="inline-image"', rendered)
+        self.assertIn('>，我是 Yang。</p>', rendered)
+        self.assertNotIn('<br>', rendered)
+
+    def test_markdown_inline_images_in_formatted_text_and_other_blocks(self):
+        for source in (
+            "# 你好 ![wave](assets/wave.png)",
+            "- 你好 ![wave](assets/wave.png)",
+            "> 你好 ![wave](assets/wave.png)",
+            "**你好** [![wave](assets/wave.png)](https://example.test)",
+            "![wave](assets/wave.png) `code`",
+            "![wave](assets/wave.png) $x^2$",
+            "| Hello | Icon |\n| --- | --- |\n| World | Hi ![wave](assets/wave.png) |",
+        ):
+            with self.subTest(source=source):
+                self.assertIn('class="inline-image"', render_markdown(source))
+
+    def test_markdown_standalone_images_keep_block_layout_even_beside_text_lines(self):
+        for source in (
+            "![wave](assets/wave.png)",
+            "[![wave](assets/wave.png)](https://example.test)",
+            "前文\n![wave](assets/wave.png)\n后文",
+            "前文  \n![wave](assets/wave.png)  \n后文",
+            "![[wave.png|24]]\n![[star.png|24]]",
+            "| Icon |\n| --- |\n| ![wave](assets/wave.png) |",
+        ):
+            with self.subTest(source=source):
+                self.assertNotIn('class="inline-image"', render_markdown(source))
+
+    def test_markdown_inline_images_are_classified_per_line(self):
+        rendered = render_markdown("你好 ![wave](assets/wave.png)\n![star](assets/star.png)\n再见 ![bye](assets/bye.png)")
+        self.assertEqual(rendered.count('class="inline-image"'), 2)
+        self.assertEqual(rendered.count('<br>'), 2)
+        self.assertNotIn('class="image-group"', rendered)
+
+    def test_markdown_obsidian_inline_image_imports_local_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            posts = Path(root)
+            (posts / "wave.png").write_bytes(b"\x89PNG wave")
+            rendered = render_markdown("你好 ![[wave.png|24]]，Paper。", posts_dir=posts)
+            self.assertIn('class="inline-image"', rendered)
+            self.assertIn('src="/assets/wave.png"', rendered)
+            self.assertIn('width="24"', rendered)
+            self.assertTrue((posts / "assets" / "wave.png").is_file())
+
+    def test_build_site_copies_inline_svg_and_keeps_gallery_layout(self):
+        with tempfile.TemporaryDirectory() as root:
+            site = Path(root)
+            posts = site / "posts"
+            (posts / "assets").mkdir(parents=True)
+            svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"></svg>'
+            (posts / "assets" / "star.svg").write_text(svg)
+            (posts / "index.md").write_text("你好 ![star](assets/star.svg)。\n\n![a](assets/star.svg) ![b](assets/star.svg)")
+            output = build_site(PaperConfig(posts_dir=posts, site_dir=site, compress=False))
+            page = (output / "index.html").read_text()
+            self.assertIn('class="inline-image"', page)
+            self.assertIn('<div class="image-group">', page)
+            self.assertEqual((output / "assets" / "star.svg").read_text(), svg)
+
     def test_markdown_missing_images_in_multi_group(self):
         with tempfile.TemporaryDirectory() as root:
             rendered = render_markdown("![[missing1.png]]\n![[missing2.png]]", posts_dir=Path(root))

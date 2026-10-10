@@ -1184,6 +1184,30 @@ def render_markdown(
                         if inferred_base and not (href == inferred_base or href.startswith(inferred_base + "/")):
                             child.attrSet("href", inferred_base + href)
 
+    def mark_inline_images(state: Any) -> None:
+        def mark_line(children: list[Any]) -> None:
+            has_text = any(
+                child.type in {"text", "code_inline", "math_inline", "html_inline"}
+                and child.content.strip()
+                for child in children
+            )
+            if has_text:
+                for child in children:
+                    if child.type == "image":
+                        child.attrJoin("class", "inline-image")
+
+        for token in state.tokens:
+            if token.type != "inline":
+                continue
+            line: list[Any] = []
+            for child in token.children or []:
+                if child.type in {"softbreak", "hardbreak"}:
+                    mark_line(line)
+                    line = []
+                else:
+                    line.append(child)
+            mark_line(line)
+
     def wrap_multi_image_groups(state: Any) -> None:
         tokens = state.tokens
         for i, token in enumerate(tokens):
@@ -1203,7 +1227,8 @@ def render_markdown(
 
     parser.core.ruler.after("inline", "paper_links_and_images", decorate_links)
     parser.add_render_rule("paper_video", lambda renderer, tokens, idx, options, env: tokens[idx].content)
-    parser.core.ruler.after("paper_links_and_images", "paper_multi_image_groups", wrap_multi_image_groups)
+    parser.core.ruler.after("paper_links_and_images", "paper_inline_images", mark_inline_images)
+    parser.core.ruler.after("paper_inline_images", "paper_multi_image_groups", wrap_multi_image_groups)
     rendered = parser.render(source)
     return _task_list_transform(rendered)
 
@@ -1525,6 +1550,7 @@ footer { margin-top: 4rem; text-align: center; }
 .markdown img[data-align="left"], .markdown img.align-left { margin-left: 0; margin-right: auto; }
 .markdown img[data-align="right"], .markdown img.align-right { margin-left: auto; margin-right: 0; }
 .markdown img[data-align="center"], .markdown img.align-center { margin-inline: auto; }
+.markdown img.inline-image { display: inline-block; margin: 0; vertical-align: middle; border: 0; border-radius: 0; }
 .markdown .missing-image { display: inline-block; padding: 0.5rem 0.75rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--subtext); background: var(--code-bg); font-size: 0.875rem; }
 .markdown .image-group { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 1rem; width: 120%; max-width: 120%; margin-left: -10%; margin-right: -10%; margin-top: 1.5rem; margin-bottom: 1.5rem; box-sizing: border-box; }
 .markdown .image-group img { display: block; max-width: 100%; height: auto; margin: 0; flex: 0 1 auto; }

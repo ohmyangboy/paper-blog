@@ -84,6 +84,10 @@ class Paper < Formula
       markup = render_markdown("![Demo|poster=poster.jpg](https://example.test/demo.mp4)", posts_dir=Path.cwd())
       assert 'poster="/assets/poster.jpg"' in markup
       assert '--video-ratio: 16 / 9' in markup
+      inline = render_markdown("Hello ![wave](assets/wave.png?w=24&h=24), Paper!")
+      assert 'class="inline-image"' in inline
+      assert 'width="24" height="24"' in inline
+      assert 'inline-image' not in render_markdown("![wave](assets/wave.png)")
       posts = Path.cwd()/"posts"
       posts.mkdir()
       (posts/"index.md").write_text("# 分享验证\\n\\n中文分享图。", encoding="utf-8")
