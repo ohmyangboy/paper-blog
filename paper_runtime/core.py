@@ -20,6 +20,17 @@ from urllib.parse import quote, unquote, urlparse
 from .i18n import override_language, resolve_language, set_current_language, t
 from .embeds import iframe_block
 from .domains import custom_domain
+from .homepages import (
+    HOMEPAGE_LANGUAGE_CSS,
+    HomepageLink,
+    homepage_alternates,
+    homepage_language_bootstrap,
+    homepage_language_label,
+    homepage_language_menu,
+    homepage_language_script,
+    homepage_og_locale,
+    normalize_homepage_language,
+)
 from .social import CARD_SIZE, SOCIAL_IMAGE_SUFFIXES, generate_card, page_description, social_metadata
 from .video import VIDEO_SUFFIXES, is_video_reference, render_video, video_css, video_script
 
@@ -117,6 +128,7 @@ class Post:
     modified_time: float
     modified_date: str
     og_image: str = ""
+    i18n: str = ""
 
 
 @dataclass(frozen=True)
@@ -530,7 +542,8 @@ def parse_frontmatter(source: str) -> tuple[dict[str, Any], str]:
         if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
             continue
         key, value = line.split(":", 1)
-        metadata[key.strip()] = _parse_scalar(value)
+        key = key.strip()
+        metadata[key] = value.strip().strip('"\'') if key == "i18n" else _parse_scalar(value)
     body = "\n".join(lines[closing + 1:]).strip()
     return metadata, body
 
@@ -1256,6 +1269,8 @@ def discover_posts(posts_dir: Path, *, include_drafts: bool = True) -> list[Post
         if source_path.name.lower() in {"index.md", "readme.md"}:
             continue
         metadata, body = parse_frontmatter(source_path.read_text(encoding="utf-8"))
+        if "i18n" in metadata:
+            continue
         modified_time = source_path.stat().st_mtime
         modified_date = _dt.date.fromtimestamp(modified_time).isoformat()
         fallback_date = modified_date
@@ -1280,6 +1295,61 @@ def discover_posts(posts_dir: Path, *, include_drafts: bool = True) -> list[Post
         if include_drafts or post.published:
             result.append(post)
     return sorted(result, key=lambda post: (post.modified_time, post.slug), reverse=True)
+
+
+def discover_homepages(posts_dir: Path) -> list[Post]:
+    """Treat tagged Markdown pages as homepage variants, independent of draft flags."""
+
+    result: list[Post] = []
+    seen: dict[str, Path] = {}
+    for path in sorted(posts_dir.expanduser().resolve().glob("*.md")):
+        if path.name.lower() in {"index.md", "readme.md"}:
+            continue
+        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        if "i18n" not in metadata:
+            continue
+        try:
+            language = normalize_homepage_language(metadata["i18n"])
+        except ValueError as error:
+            raise ValueError(f"{path.name}: {error}") from error
+        if language in seen:
+            raise ValueError(t("homepage_language_duplicate", language=language, first=seen[language].name, second=path.name))
+        seen[language] = path
+        modified_time = path.stat().st_mtime
+        modified_date = _dt.date.fromtimestamp(modified_time).isoformat()
+        result.append(Post(
+            slug=f"__home__:{language}", title=str(metadata.get("title") or path.stem),
+            date=modified_date, published=True, description=str(metadata.get("description") or ""),
+            content=body, source_path=path, modified_time=modified_time, modified_date=modified_date,
+            og_image=str(metadata.get("og_image") or metadata.get("ogImage") or ""), i18n=language,
+        ))
+    return result
+
+
+def create_homepage(config: PaperConfig, language: str) -> Path:
+    """Copy the default homepage, preserving its body and metadata, without overwriting."""
+
+    language = normalize_homepage_language(language)
+    index_path = config.posts_dir / "index.md"
+    source = index_path.read_text(encoding="utf-8") if index_path.exists() else DEFAULT_INDEX
+    metadata, _body = parse_frontmatter(source)
+    existing = {page.i18n: page.source_path for page in discover_homepages(config.posts_dir)}
+    if "i18n" in metadata:
+        existing[normalize_homepage_language(metadata["i18n"])] = index_path
+    target = config.posts_dir / f"index.{language}.md"
+    if language in existing or target.exists():
+        raise ValueError(t("homepage_language_exists", language=language, path=existing.get(language, target)))
+    lines = source.splitlines(keepends=True)
+    closing = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+    if lines and lines[0].strip() == "---" and closing is not None:
+        header = "".join(line for line in lines[1:closing] if not re.match(r"^\s*i18n\s*:", line))
+        source = f"---\ni18n: {language}\n{header}" + "".join(lines[closing:])
+    else:
+        source = f"---\ni18n: {language}\n---\n\n{source}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("x", encoding="utf-8") as output:
+        output.write(source)
+    return target
 
 
 def set_post_published(source_path: Path, published: bool) -> None:
@@ -1580,7 +1650,7 @@ footer { margin-top: 4rem; text-align: center; }
         .replace("__THEME_DARK_BG__", THEME_BACKGROUNDS["dark"])
         .replace("__THEME_TRANSITION__", f"{THEME_TRANSITION_MS / 1000:g}")
     )
-    return themed + "\n" + pygments_css + "\n" + video_css()
+    return themed + "\n" + pygments_css + "\n" + video_css() + HOMEPAGE_LANGUAGE_CSS
 
 
 def _github_url(config: PaperConfig) -> str:
@@ -1695,6 +1765,7 @@ def _page_social_metadata(
     config: PaperConfig, build_dir: Path, *, title: str, rendered: str, path: str,
     description: str = "", image: str = "", default_image: str = "",
     page_type: str = "website", date: str = "", draft: bool = False,
+    locale: str = "",
 ) -> str:
     description = page_description(rendered, description)
     url = _absolute_href(config, path)
@@ -1710,11 +1781,11 @@ def _page_social_metadata(
     return social_metadata(
         title=title, site_name=config.site_name, description=description, url=url,
         image=_absolute_url(config, image_href), image_size=image_size,
-        page_type=page_type, locale=resolve_language(config_lang=config.language), draft=draft,
+        page_type=page_type, locale=locale or resolve_language(config_lang=config.language), draft=draft,
     )
 
 
-def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False, metadata: str = "") -> str:
+def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, live_reload: bool = False, home: bool = False, metadata: str = "", homepage_links: list[HomepageLink] | None = None, homepage_choice: str = "", language: str = "") -> str:
     marker = f'<p><strong>{t("draft_preview")}</strong></p>' if draft else ""
     script = _live_reload_script() if live_reload else ""
     favicon = html.escape(_favicon_href(config), quote=True)
@@ -1723,12 +1794,17 @@ def _layout(config: PaperConfig, title: str, body: str, *, draft: bool = False, 
     container_class = "container home-container" if home else "container"
     katex_head = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">'
     katex_scripts = '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:\'$$\',right:\'$$\',display:true},{left:\'$\',right:\'$\',display:false},{left:\'\\\\(\',right:\'\\\\)\',display:false},{left:\'\\\\[\',right:\'\\\\]\',display:true}],throwOnError:false});"></script>'
-    html_lang = t("html_lang_code")
+    html_lang = language or t("html_lang_code")
+    direction = ' dir="rtl"' if html_lang.split("-")[0] in {"ar", "fa", "he", "ur"} else ""
     theme_bootstrap = _theme_bootstrap_script()
     theme_toggle = _theme_toggle()
     theme_script = _theme_toggle_script()
+    homepage_links = homepage_links or []
+    language_bootstrap = homepage_language_bootstrap(homepage_links, base_path=_base_path(config), auto=home and homepage_choice == "default")
+    language_menu = homepage_language_menu(homepage_links, homepage_choice)
+    language_script = homepage_language_script() if language_menu else ""
     player_script = video_script() if 'class="paper-video"' in body else ""
-    return f"""<!doctype html><html lang="{html_lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title>{metadata}<style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{player_script}{katex_scripts}</body></html>"""
+    return f"""<!doctype html><html lang="{html_lang}"{direction}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{theme_bootstrap}{language_bootstrap}<meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="{html.escape(config.color, quote=True)}"><link rel="icon" href="{favicon}">{katex_head}<title>{html.escape(page_title)}</title>{metadata}<style>{_css(config)}</style></head><body><div class="{container_class}">{marker}{body}</div><footer><span class="footer-row"><a href="{PAPER_PROJECT_URL}" target="_blank" rel="noopener noreferrer" class="footer-brand">Paper Blog</a>{language_menu}{theme_toggle}</span></footer>{lightbox}{script}{theme_script}{language_script}{player_script}{katex_scripts}</body></html>"""
 
 
 def _write(path: Path, content: str) -> None:
@@ -1828,33 +1904,51 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
         index_path = posts_dir / "index.md"
         index_source = index_path.read_text(encoding="utf-8") if index_path.exists() else DEFAULT_INDEX
         index_metadata, index_body = parse_frontmatter(index_source)
+        homepages = discover_homepages(posts_dir)
+        default_language = normalize_homepage_language(index_metadata["i18n"]) if "i18n" in index_metadata else ""
+        if any(page.i18n == default_language for page in homepages):
+            duplicate = next(page for page in homepages if page.i18n == default_language)
+            raise ValueError(t("homepage_language_duplicate", language=default_language, first=index_path.name, second=duplicate.source_path.name))
+        homepage_links = [HomepageLink("default", default_language, _href(config, "/"), t("homepage_default"))]
+        homepage_links += [HomepageLink(page.i18n, page.i18n, _href(config, f"/{page.i18n}/"), homepage_language_label(page.i18n)) for page in homepages]
+        alternate_links = [HomepageLink(link.choice, link.language, _absolute_url(config, link.href), link.label) for link in homepage_links]
         temp_parent = Path(tempfile.mkdtemp(prefix="paper-build-", dir=config.site_dir))
         try:
             rss_href = html.escape(_href(config, "/rss.xml"), quote=True)
-            listing = [f'<main><div class="writing-header"><h2>Writing</h2><a href="{rss_href}" class="footer-brand">RSS</a></div><div class="post-list">']
-            draft_tag = t("draft_tag_paren")
-            for post in posts:
-                if not post.published and not include_drafts:
-                    continue
-                marker = draft_tag if not post.published else ""
-                listing.append(
-                    f'<div class="post-item"><a class="post-title" href="{_href(config, f"/posts/{post.slug}/")}">'
-                    f'{html.escape(post.title)}{marker}</a><time class="post-date">{html.escape(post.date)}</time></div>'
-                )
-            listing.append("</div></main>")
             base_path = _base_path(config)
             asset_base = _href(config, "/assets/")
             default_image = social_image_href(config, config.og_image)
-            rendered_index = render_markdown(index_body, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)
-            index_html = f'<header><div class="markdown">{rendered_index}</div></header>' + "\n" + "\n".join(listing)
-            home_metadata = _page_social_metadata(
-                config, temp_parent, title=config.site_name, rendered=rendered_index, path="/",
-                description=str(index_metadata.get("description") or ""),
-                image=str(index_metadata.get("og_image") or index_metadata.get("ogImage") or ""),
-                default_image=default_image,
-            )
-            _write(temp_parent / "index.html", _layout(config, config.site_name, index_html, draft=False, live_reload=live_reload, home=True, metadata=home_metadata))
-            _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload))
+            variants = [("default", default_language or t("html_lang_code"), index_body, config.site_name,
+                         str(index_metadata.get("description") or ""), str(index_metadata.get("og_image") or index_metadata.get("ogImage") or ""))]
+            variants += [(page.i18n, page.i18n, page.content,
+                          page.title if page.title != page.source_path.stem else config.site_name,
+                          page.description, page.og_image) for page in homepages]
+            for choice, language, content, title, description, image in variants:
+                page_ui_language = "zh_CN" if language.split("-")[0] == "zh" else "en_US"
+                with override_language(page_ui_language):
+                    listing = [f'<main><div class="writing-header"><h2>Writing</h2><a href="{rss_href}" class="footer-brand">RSS</a></div><div class="post-list">']
+                    for post in posts:
+                        marker = t("draft_tag_paren") if not post.published else ""
+                        listing.append(
+                            f'<div class="post-item"><a class="post-title" href="{_href(config, f"/posts/{post.slug}/")}">'
+                            f'{html.escape(post.title)}{marker}</a><time class="post-date">{html.escape(post.date)}</time></div>'
+                        )
+                    listing.append("</div></main>")
+                    rendered_index = render_markdown(content, asset_base=asset_base, base_path=base_path, posts_dir=posts_dir)
+                    index_html = f'<header><div class="markdown">{rendered_index}</div></header>' + "\n" + "\n".join(listing)
+                    page_path = "/" if choice == "default" else f"/{language}/"
+                    home_metadata = _page_social_metadata(
+                        config, temp_parent, title=title, rendered=rendered_index, path=page_path,
+                        description=description, image=image, default_image=default_image,
+                        locale=homepage_og_locale(language),
+                    )
+                    if homepages:
+                        home_metadata += homepage_alternates(alternate_links, _absolute_href(config, page_path))
+                    menu_links = [HomepageLink("default", default_language, _href(config, "/"), t("homepage_default")), *homepage_links[1:]]
+                    target = temp_parent / "index.html" if choice == "default" else temp_parent / language / "index.html"
+                    _write(target, _layout(config, title, index_html, live_reload=live_reload, home=True, metadata=home_metadata,
+                                           homepage_links=menu_links, homepage_choice=choice, language=language))
+            _write(temp_parent / "404.html", _layout(config, t("not_found"), f"<main><h1>{t('not_found')}</h1></main>", live_reload=live_reload, homepage_links=homepage_links))
             rendered_posts: dict[str, str] = {}
             back_title = html.escape(t("back_to_home"), quote=True)
             back_href = html.escape(_href(config, "/"), quote=True)
@@ -1871,7 +1965,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
                     path=f"/posts/{post.slug}/", description=post.description, image=post.og_image,
                     default_image=default_image, page_type="article", date=post.date, draft=not post.published,
                 )
-                _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload, metadata=post_metadata))
+                _write(temp_parent / "posts" / post.slug / "index.html", _layout(config, post.title, article, draft=not post.published, live_reload=live_reload, metadata=post_metadata, homepage_links=homepage_links))
 
             _copy_default_icon(temp_parent, config)
             _copy_referenced_assets(temp_parent, posts_dir, asset_base, compress=config.compress, absolute_asset_base=_absolute_href(config, "/assets/"))
@@ -1882,7 +1976,7 @@ def build_site(config: PaperConfig, *, include_drafts: bool = False, live_reload
             feed_url = _absolute_href(config, "/rss.xml")
             feed_icon = _feed_icon_url(config)
             rss_items: list[str] = []
-            sitemap_urls = [_absolute_href(config, "/")]
+            sitemap_urls = [_absolute_href(config, "/"), *[_absolute_href(config, f"/{page.i18n}/") for page in homepages]]
             for post in published:
                 url = _absolute_href(config, f"/posts/{post.slug}/")
                 full_content = _absolute_document_urls(config, rendered_posts[post.slug])

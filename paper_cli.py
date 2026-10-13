@@ -40,6 +40,8 @@ from paper_runtime.core import (
     _has_github_pages_actions,
     build_site,
     config_path,
+    create_homepage,
+    discover_homepages,
     discover_posts,
     load_config,
     load_local_config,
@@ -51,6 +53,7 @@ from paper_runtime.core import (
     social_image_href,
     set_post_published,
 )
+from paper_runtime.homepages import HOMEPAGE_LANGUAGES, homepage_language_label, normalize_homepage_language
 from paper_runtime.i18n import (
     LANGUAGE_LABELS,
     SUPPORTED_LANGUAGES,
@@ -76,7 +79,7 @@ from paper_runtime.preview import (
     restart_preview,
 )
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 DEFAULT_POSTS_DIR = Path.home() / "Documents" / "Paper" / "posts"
 TERRACOTTA = "\033[38;2;217;119;87m"
 GREEN = "\033[32m"
@@ -615,6 +618,7 @@ def cmd_brand_config(config: PaperConfig) -> int:
             [
                 ("color", "color", t("brand_current_color", color=config.color)),
                 ("icon", "icon", t("brand_icon_desc", icon_label=icon_label)),
+                ("i18n", t("homepage_new"), t("homepage_new_desc")),
                 ("back", "back", t("brand_back_to_config")),
             ],
         )
@@ -624,6 +628,8 @@ def cmd_brand_config(config: PaperConfig) -> int:
             config = _set_highlight_color(config)
         elif action == "icon":
             config = _set_icon(config)
+        elif action == "i18n":
+            _add_homepage(config)
 
 
 def cmd_config(
@@ -1570,8 +1576,39 @@ def cmd_new(title: str | None, local: bool = False, local_dir: Path | str | None
     return 0
 
 
+def _add_homepage(config: PaperConfig) -> None:
+    existing = {page.i18n for page in discover_homepages(config.posts_dir)}
+    index_path = config.posts_dir / "index.md"
+    if index_path.exists():
+        metadata, _body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+        if "i18n" in metadata:
+            existing.add(normalize_homepage_language(metadata["i18n"]))
+    language = _terminal_menu(
+        t("homepage_language_menu"),
+        [(code, label, f"i18n: {code}") for code, label in HOMEPAGE_LANGUAGES.items() if code not in existing]
+        + [("back", t("back"), t("cancel"))],
+    )
+    if language in {None, "back"}:
+        return
+    try:
+        path = create_homepage(config, language)
+    except (ValueError, FileExistsError) as error:
+        _error(str(error), 1)
+        _pause()
+        return
+    _open_editor(path, config)
+    print(t("homepage_created", language=homepage_language_label(language), path=path))
+    _pause()
+
+
+def _homepage_tag(post: Post) -> str:
+    if post.slug == "__home__":
+        return t("list_home_tag")
+    return t("list_home_language_tag", language=homepage_language_label(post.i18n)) if post.i18n else ""
+
+
 def _list_items(config: PaperConfig) -> list[Post]:
-    """Return the fixed homepage followed by articles ordered by modification time."""
+    """Return default and translated homepages before articles ordered by modification time."""
 
     index_path = config.posts_dir / "index.md"
     if index_path.exists():
@@ -1595,7 +1632,7 @@ def _list_items(config: PaperConfig) -> list[Post]:
         modified_time=modified_time,
         modified_date=modified_date,
     )
-    return [homepage, *discover_posts(config.posts_dir)]
+    return [homepage, *discover_homepages(config.posts_dir), *discover_posts(config.posts_dir)]
 
 
 def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
@@ -1606,7 +1643,7 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         for post in posts:
             marker = "🟢" if post.published else "⚪"
-            homepage = t("list_home_tag") if post.slug == "__home__" else ""
+            homepage = _homepage_tag(post)
             print(f"{marker}  {post.modified_date}  {post.title}{homepage}")
         return 0
 
@@ -1616,7 +1653,7 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
             (
                 post.slug,
                 f"{'🟢' if post.published else '⚪'} {post.modified_date}",
-                f"{post.title}{t('list_home_tag') if post.slug == '__home__' else ''}",
+                f"{post.title}{_homepage_tag(post)}",
             )
             for post in posts
         ] + [("back", t("back"), t("config_item_back"))]
@@ -1627,18 +1664,21 @@ def cmd_list(local: bool = False, local_dir: Path | str | None = None) -> int:
         post = next((item for item in posts if item.slug == selected), None)
         if post is None:
             continue
-        if post.slug == "__home__":
+        if post.slug == "__home__" or post.i18n:
+            home_options = [("edit", t("list_home_op_edit"), t("list_home_op_edit_language_desc", filename=post.source_path.name))]
+            if post.slug == "__home__":
+                home_options.append(("i18n", t("homepage_new"), t("homepage_new_desc")))
+            home_options.append(("back", t("back"), t("posts_title")))
             action = _terminal_menu(
                 t("list_home_op_title", title=post.title),
-                [
-                    ("edit", t("list_home_op_edit"), t("list_home_op_edit_desc")),
-                    ("back", t("back"), t("posts_title")),
-                ],
+                home_options,
             )
             if action == "edit":
                 if not post.source_path.exists():
                     post.source_path.write_text(DEFAULT_INDEX, encoding="utf-8")
                 _open_editor(post.source_path, config)
+            elif action == "i18n":
+                _add_homepage(config)
             continue
         action = _terminal_menu(
             t("post_operation_title", title=post.title),

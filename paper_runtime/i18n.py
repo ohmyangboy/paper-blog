@@ -315,6 +315,50 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh_CN": "使用默认编辑器打开 index.md",
         "en_US": "Open index.md in default editor",
     },
+    "list_home_language_tag": {
+        "zh_CN": "（首页 · {language}）",
+        "en_US": " (Homepage · {language})",
+    },
+    "list_home_op_edit_language_desc": {
+        "zh_CN": "使用默认编辑器打开 {filename}",
+        "en_US": "Open {filename} in default editor",
+    },
+    "homepage_new": {
+        "zh_CN": "新增多语言页面",
+        "en_US": "Add multilingual page",
+    },
+    "homepage_new_desc": {
+        "zh_CN": "选择语言，创建对应的首页版本",
+        "en_US": "Choose a language and create a homepage version",
+    },
+    "homepage_language_menu": {
+        "zh_CN": "选择新首页的语言（已有版本不会重复创建）：",
+        "en_US": "Choose a homepage language (existing versions are excluded):",
+    },
+    "homepage_created": {
+        "zh_CN": "✅ 已创建 {language} 首页：{path}\n   已复制默认首页内容，请在编辑器中翻译和修改。",
+        "en_US": "✅ Created {language} homepage: {path}\n   Default homepage content copied; translate and edit it in your editor.",
+    },
+    "homepage_language_invalid": {
+        "zh_CN": "无效的 i18n 语言标记：{language}。请使用 en、ja、zh-TW 或 pt-BR 等格式。",
+        "en_US": "Invalid i18n language tag: {language}. Use en, ja, zh-TW or pt-BR.",
+    },
+    "homepage_language_duplicate": {
+        "zh_CN": "首页语言冲突：{first} 与 {second} 都使用 i18n: {language}",
+        "en_US": "Duplicate homepage language: {first} and {second} both use i18n: {language}",
+    },
+    "homepage_language_exists": {
+        "zh_CN": "{language} 首页已存在：{path}",
+        "en_US": "The {language} homepage already exists: {path}",
+    },
+    "homepage_default": {
+        "zh_CN": "默认首页",
+        "en_US": "Default homepage",
+    },
+    "homepage_switch_language": {
+        "zh_CN": "切换语言 / Language",
+        "en_US": "Switch language",
+    },
     "list_post_op_edit_desc": {
         "zh_CN": "使用默认编辑器打开 Markdown",
         "en_US": "Open Markdown in default editor",

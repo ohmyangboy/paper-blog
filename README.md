@@ -214,6 +214,32 @@ description: 这是一篇关于 Paper 的极简介绍
 单回车直接换行，空行用于分段。
 ```
 
+### 多语言首页
+
+在文章控制台选中首页，进入「新增多语言页面」，或在 `paper config home` 中选择同名入口，再选择 English、日本語、繁體中文等常见语言。Paper 会复制默认首页到 `index.en.md` 等文件，写入 `i18n` 字段并打开编辑器；请自行翻译页面内容。
+
+也可以在文章目录顶层手动创建任意名称的 Markdown 文件：
+
+```md
+---
+i18n: en
+title: Welcome
+description: My English homepage
+---
+
+# Welcome
+
+Write the English version of your homepage here.
+```
+
+默认首页仍为 `index.md`，英文版本生成到 `/en/`；`i18n: ja`、`i18n: zh-TW`、`i18n: pt-BR` 则生成对应的独立地址。语言标记也接受 `en_US` 这类下划线形式，构建时统一为 `en-US`。带 `i18n` 的页面作为首页版本，和默认首页一样直接参与构建，不需要 `published: true`，也不会进入文章列表或 RSS。
+
+页脚「Paper Blog」右侧的地球图标提供已创建语言和默认首页的切换菜单。访问默认首页时，先读取访客此前手动选择，再按浏览器的 `navigator.languages` 偏好顺序匹配；例如 `en-US` 可以匹配 `en`，中文匹配区分简繁体。没有对应版本就显示默认首页。直接访问 `/en/` 等明确的语言地址会保留该版本。关闭 JavaScript 时默认首页照常显示，语言菜单中的链接仍可使用。
+
+如果需要声明默认首页本身的语言，可以在 `index.md` 中加 `i18n: zh-CN`，它仍位于根地址，并参与语言偏好匹配。语言菜单只列出实际存在的版本；手动选择优先于自动检测，并按站点路径保存。实现遵循 [MDN 的浏览器语言偏好顺序](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/languages)和 [W3C 关于语言协商及手动切换的建议](https://www.w3.org/International/questions/qa-when-lang-neg)。
+
+构建时会生成对应的 HTML `lang`、canonical、`hreflang` 和 sitemap，并沿用首页的 Markdown、资源与分享图渲染流程。此功能提供首页内容的多个语言版本；文章内容由各版本首页共用。使用 `paper serve` 本地预览，或 `paper build` 生成静态文件。
+
 ### 站点名称与 OG 分享图
 
 在 `paper config` 中选择「站点名称」或「默认分享图」，也可以直接运行：
