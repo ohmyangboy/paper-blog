@@ -3,8 +3,8 @@ class Paper < Formula
 
   desc "Minimal Markdown static site generator and writing CLI"
   homepage "https://github.com/ohmyangboy/paper-blog"
-  url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v0.1.7.tar.gz"
-  sha256 "a0d2af12b6ebcb1b7954bbc02660f7b75b3184c55a90a85de9e392868189798b"
+  url "https://github.com/ohmyangboy/paper-blog/archive/refs/tags/v0.1.8.tar.gz"
+  sha256 "fa0dc6fab65c0749c4f94a1acaec42ef499050a045febbfe6394c4c770a9fd1b"
   license "GPL-3.0-only"
 
   depends_on "python@3.12"
@@ -77,7 +77,7 @@ class Paper < Formula
       import os
       from PIL import Image
       from paper_cli import main
-      from paper_runtime.core import build_site, load_local_config, render_markdown, save_config
+      from paper_runtime.core import build_site, create_homepage, load_local_config, render_markdown, save_config
       from paper_runtime.domains import dns_records, normalize_pages_url
       os.environ["PAPER_HOME"] = str(Path.cwd()/"paper-home")
       os.environ["PAPER_NO_AUTO_UPDATE"] = "1"
@@ -103,6 +103,17 @@ class Paper < Formula
       assert 'property="og:image"' in (output/"index.html").read_text(encoding="utf-8")
       cards = list((output/"assets/og").glob("*.png"))
       assert len(cards) == 1
+      create_homepage(config, "en")
+      output = build_site(config)
+      english = (output/"en/index.html").read_text(encoding="utf-8")
+      assert '<html lang="en">' in english
+      assert 'hreflang="en"' in english
+      import paper_cli
+      from unittest.mock import patch
+      with patch("paper_cli._terminal_menu", side_effect=["i18n", "back"]) as menu, patch("paper_cli._add_homepage") as add:
+          assert paper_cli.cmd_brand_config(config) == 0
+          assert any(option[0] == "i18n" for option in menu.call_args_list[0].args[1])
+          add.assert_called_once_with(config)
       with Image.open(cards[0]) as image:
           assert image.size == (1200, 630)
     PYTHON
